@@ -74,7 +74,13 @@
 
 - MCU / compute (onboard inference target) — needs enough headroom for
   balance control (latency-sensitive) *and* stereo depth processing
-  simultaneously, not just motor control
+  simultaneously, not just motor control. **Candidate: Raspberry Pi 4 or
+  5** — grounded in Unitree's own Qmini (real, open-source, proven bipedal
+  robot; Pi4 is its default compute), much cheaper than the Jetson Orin
+  Nano an unbuilt Beni-inspired project (BT-Robot) proposed. Caveat: Qmini
+  is a *legged* biped (no wheels, no continuous stereo-depth+RL-inference
+  load stacked on top of balance) — its Pi4 workload may be lighter than
+  ours. Not verified against our actual combined workload yet.
 - Driver/control board selection (SimpleFOCMini vs. moteus-class vs.
   DYNAMIXEL-class — not decided; each drives the hip's belt/pulley design
   differently) and belt/pulley ratio + geometry for the hip (not designed

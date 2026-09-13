@@ -34,7 +34,10 @@ Spider-topology legged robot.
 ## TODO before any build work starts
 
 - MCU / compute (onboard inference target) — note stereo depth computation
-  itself has a real compute cost; factor this in alongside motor control
+  itself has a real compute cost; factor this in alongside motor control.
+  **Candidate: Raspberry Pi 4 or 5** (same as `biped/`, see its README for
+  reasoning) — spider has no balance-control latency constraint stacked on
+  top, so should fit more comfortably than biped's combined workload.
 - Driver/control board selection (SimpleFOCMini vs. moteus-class vs.
   DYNAMIXEL-class — not decided; no gear ratio needed, direct-drive)
 - Bench-test GBM3506H-130T's real torque/current before fully trusting
