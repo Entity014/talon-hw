@@ -42,15 +42,34 @@
   conceptually but its implementation (scripted `obstacle_dist` signal,
   same treatment as `DummyTalonEnv`) needs its own biped env, not a
   borrowed one.
+- **Weight budget:** ≤ 2 kg total (chassis + battery + electronics + motors)
+  — tighter here than it sounds, since biped also carries balance-control
+  compute load on top of everything spider/A1 carry
+- **Perception:** 2 cameras for stereo depth, feeding a real Exteroception
+  signal into the policy — same fork noted in the top-level `README.md` on
+  off-the-shelf stereo-depth module vs. DIY dual-camera pipeline; for biped
+  specifically, weigh compute budget carefully since balance control is
+  already latency-sensitive and can't compete for cycles with depth
+  processing the way a quasi-static platform (spider/A1) can tolerate more
+  slack in.
 
 ## TODO before any build work starts
 
-- MCU / compute (onboard inference target)
-- Specific BLDC module + driver/control board, gear ratio
-- Sensors (IMU at minimum — required for the new balance term; anything else?)
+- MCU / compute (onboard inference target) — needs enough headroom for
+  balance control (latency-sensitive) *and* stereo depth processing
+  simultaneously, not just motor control
+- Specific BLDC module + driver/control board, gear ratio, sized against
+  the 2 kg weight budget
+- Power system (battery — voltage must match the BLDC driver + MCU + camera
+  compute, not decided yet)
+- Chassis/mechanical structure (3D printed is the likely default at this
+  scale — not decided)
+- Sensors: IMU at minimum (required for the `balance` term), plus the
+  stereo camera pair above
 - Design the `balance` reward term's exact formula (likely pitch/roll
   deviation from upright, similar in spirit to how `smoothness` penalizes
   action rate) — not started yet
 - Once the above are set, add a biped-specific `RewardVectorCfg` variant
   and `IsaacLabBipedEnv`/equivalent in `talon_rl`, matching the 6-DoF
-  `ActionSpaceCfg` this platform needs
+  `ActionSpaceCfg` this platform needs, plus an Exteroception Encoder input
+  path once the stereo pipeline exists (§3.2.2)
