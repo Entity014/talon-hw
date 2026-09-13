@@ -83,8 +83,14 @@
   ours. Not verified against our actual combined workload yet.
 - Driver/control board selection (SimpleFOCMini vs. moteus-class vs.
   DYNAMIXEL-class — not decided; each drives the hip's belt/pulley design
-  differently) and belt/pulley ratio + geometry for the hip (not designed
-  yet, only "use a belt" is locked)
+  differently)
+- **Hip belt ratio: 5:1 (starting point, not bench-verified).** At $K_t
+  \approx 0.174$ N·m/A (GBM3506, KV=55): comfortable (~1.2-2.3A) against
+  the recalibrated ~1-2N·m target, tight (~6.9A, burst-only) against the
+  original conservative ~6N·m single-leg+jump-dynamics target. Real
+  answer depends on continuous vs. burst torque need, which isn't
+  resolved — bench-test before committing pulley sizes/hardware.
+  Pulley sizes/mounting geometry not designed yet either way.
 - Bench-test GBM3506H-130T and GBM5010-150T's real torque/current before
   fully trusting the KV-derived estimates in the top-level README
 - Power system (battery — voltage must match the BLDC driver + MCU + camera
