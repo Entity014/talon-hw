@@ -1,0 +1,9 @@
+# --- OS / editor ---
+.vscode/
+.DS_Store
+
+# --- Common firmware/build artifacts (adjust once toolchain is chosen) ---
+build/
+*.bin
+*.hex
+*.elf
