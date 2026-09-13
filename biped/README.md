@@ -90,9 +90,18 @@ settled.
   is a *legged* biped (no wheels, no continuous stereo-depth+RL-inference
   load stacked on top of balance) — its Pi4 workload may be lighter than
   ours. Not verified against our actual combined workload yet.
-- Driver/control board selection (SimpleFOCMini vs. moteus-class vs.
-  DYNAMIXEL-class — not decided; each drives the hip's belt/pulley design
-  differently)
+- **Driver/control board: Dagor Brushless Controller (candidate, locked).**
+  44×44×6mm, 12g, ESP32 + DRV8305 + 14-bit on-board magnetic encoder, 7A
+  continuous / 40A peak per phase — comfortably covers even the 5010
+  knee/wheel current estimates that ruled out SimpleFOCMini (2.5A) and MKS
+  MINI FOC (3A). Fully open source (hardware + firmware), SimpleFOC-based.
+  **Still open:** alpha-stage project (less proven than official SimpleFOC
+  boards) — bench-test before committing to a build quantity; CAN support
+  not confirmed from docs, check the GitHub repo directly (ESP32 has
+  native TWAI, so adding a CAN transceiver is the fallback either way);
+  on-board encoder covers the *motor-side* reading only — the hip's
+  second (output-side, post-belt) encoder per the dual-encoder plan below
+  is still a separate AS5600 add-on, not covered by Dagor's on-board one.
 - **Hip belt ratio: 5:1 (starting point, not bench-verified).** At $K_t
   \approx 0.174$ N·m/A (GBM3506, KV=55): comfortable (~1.2-2.3A) against
   the recalibrated ~1-2N·m target, tight (~6.9A, burst-only) against the

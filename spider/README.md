@@ -38,8 +38,10 @@ Spider-topology legged robot.
   **Candidate: Raspberry Pi 4 or 5** (same as `biped/`, see its README for
   reasoning) — spider has no balance-control latency constraint stacked on
   top, so should fit more comfortably than biped's combined workload.
-- Driver/control board selection (SimpleFOCMini vs. moteus-class vs.
-  DYNAMIXEL-class — not decided; no gear ratio needed, direct-drive)
+- **Driver/control board: Dagor Brushless Controller (candidate, locked)**
+  — same as `biped/`'s hip/knee/wheel, see its README for full spec. Single
+  on-board encoder is sufficient here (direct-drive, no belt — no second
+  output-side encoder needed the way biped's hip has).
 - Bench-test GBM3506H-130T's real torque/current before fully trusting
   the KV-derived estimate in the top-level README
 - Power system (battery — voltage must match the BLDC driver + MCU + camera
