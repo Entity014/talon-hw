@@ -10,10 +10,15 @@
   compact envelope means favoring small integrated BLDC+driver modules,
   e.g. gimbal-style or mini-quadruped-actuator form factors, over separate
   large BLDC + external ESC)
-- **Leg-joint motor:** shared part with `spider/`'s leg joints — see
-  top-level `README.md`'s "Shared leg-joint motor" section. The wheel
-  motor (propulsion + balance correction) is a separate, not-yet-sized
-  selection — different loading than a static leg joint.
+- **Motor + transmission (per joint, not shared uniformly with spider):**
+  see top-level `README.md`'s "Motor + transmission plan" table for the
+  full reasoning — grounded in a Beni teardown, not just calculation.
+  - **Hip:** GBM3506-class + timing belt (smaller motor, belt gives the
+    torque multiplication + remote-mounting/low-inertia benefit; matches
+    Beni's observed hip = smaller motor + belt)
+  - **Knee:** GBM5010-class, direct (matches Beni's observed knee/wheel
+    same-size-motor pattern)
+  - **Wheel:** GBM5010-class, direct (same as knee)
 - **Reward objective:** must fulfill the full 5-term vector from
   `talon_rl.config.RewardVectorCfg` (progress, clearance, energy, impact,
   smoothness) — same as A1/spider, not a reduced subset — **plus a new 6th
@@ -70,8 +75,12 @@
 - MCU / compute (onboard inference target) — needs enough headroom for
   balance control (latency-sensitive) *and* stereo depth processing
   simultaneously, not just motor control
-- Specific BLDC module + driver/control board, gear ratio, sized against
-  the 2 kg weight budget
+- Driver/control board selection (SimpleFOCMini vs. moteus-class vs.
+  DYNAMIXEL-class — not decided; each drives the hip's belt/pulley design
+  differently) and belt/pulley ratio + geometry for the hip (not designed
+  yet, only "use a belt" is locked)
+- Bench-test GBM3506H-130T and GBM5010-150T's real torque/current before
+  fully trusting the KV-derived estimates in the top-level README
 - Power system (battery — voltage must match the BLDC driver + MCU + camera
   compute, not decided yet)
 - Chassis/mechanical structure (3D printed is the likely default at this

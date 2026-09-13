@@ -40,25 +40,46 @@ Exteroception signal into the policy. Two ways to get there:
 Leans toward (1) on cost-of-engineering-time grounds (reach for the
 existing module before building the pipeline yourself) — not decided yet.
 
-## Shared leg-joint motor across both platforms
+## Motor + transmission plan (2 motor sizes, whole project)
 
-Spider and biped are locked to the same envelope (≤20×20×20cm) and weight
-budget (≤2kg), and the worst-case leg-joint torque estimate (single-leg
-support + 2× dynamic margin) came out to the same target for both —
-**~6 N·m at the hip, ~3 N·m at the knee** (see `biped/README.md`'s torque
-note; assumes ~7-8cm leg segments, revisit once real leg dimensions are
-fixed). Decision: **use the same motor model for both platforms' leg
-joints** — one part to source/stock instead of two, cheaper on a limited
-budget. This does NOT cover biped's wheel motor, which is a separate
-selection (different function — propulsion + balance correction, not
-leg-joint torque — sizing not done yet).
+Superseded the original "single shared motor, QDD gearbox" idea below once
+we tore down a real reference product for grounding (Mondo Robotics' Beni —
+see `biped/README.md`'s reference-product note; teardown source: YouTube
+"We Cracked Beni Open!"). The teardown showed labeled per-joint connectors
+(R-KNEE/R-HIP/L-HIP/L-KNEE) on a custom centralized driver board (not a
+purchasable dev board — proprietary, not something to copy directly), a
+visibly **smaller motor at the hip driving through a timing belt**, and a
+**larger motor, same size as the wheel motor, at the knee** (direct, no
+visible belt) — plus a four-bar linkage at the knee (possibly with a
+spring/shock, unconfirmed) suggesting passive compliance there.
 
-Direct-drive was ruled out (see `biped/README.md`) for backdrivability —
-looking at Quasi-Direct Drive (QDD): large-diameter/pancake BLDC + low
-gear ratio (<10:1), same pattern MIT Mini Cheetah and mjbots' moteus-c1
-target. No specific motor SKU picked yet — search "QDD actuator" /
-mini-cheetah-style actuator kits for concrete parts+pricing rather than
-trusting a part number pasted here, this market moves fast.
+Locked allocation, reasoned from that evidence + $K_t$ estimates from each
+motor's KV (torque constant $K_t \approx 9.55/K_v$, ballpark from
+datasheet KV only — **not verified against real continuous-current specs
+for either motor**, bench-test before fully trusting):
+
+| Platform | Joint | Motor | Transmission | Why |
+|---|---|---|---|---|
+| Biped | Hip | GBM3506-class (~55KV, smaller/cheaper) | + timing belt | Needs the most mechanical advantage (balance + occasional jump loading); belt gives torque multiplication + remote motor mounting (lower leg inertia) without losing backdrivability the way a high-ratio gearbox would |
+| Biped | Knee | GBM5010-class (90KV, e.g. Rctimer GBM5010-150T) | direct | Matches Beni's same-size knee/wheel motor; less mechanical-advantage need than hip |
+| Biped | Wheel | GBM5010-class | direct | Propulsion + balance correction; same size as knee per teardown |
+| Spider | Hip | GBM3506-class | direct (no belt) | Quasi-static, multi-leg load-sharing keeps torque need lower than biped's single-point dynamic loading — direct-drive plausible here where it wasn't for biped's hip |
+| Spider | Knee | GBM3506-class | direct | Same reasoning as spider hip; needs less torque than hip per the original moment-arm estimate, so no reason to upsize |
+
+**2 motor sizes total for the whole project** (3506-class, 5010-class) —
+cheaper to stock/source than a different part per joint. Belt-drive is
+biped-hip-only; nothing else in the plan uses one right now.
+
+**Still open / not verified:**
+- Exact motor SKUs and current pricing — `iPower GBM3506H-130T` and
+  `Rctimer GBM5010-150T 90KV` (~฿597) are the concrete candidates discussed
+  so far, not final purchases
+- Real continuous-current / stall-torque datasheet numbers for either motor
+  — everything above is a KV-derived $K_t$ estimate
+- Belt ratio, pulley sizes, and mounting geometry for biped's hip — not
+  designed yet, only "yes, use a belt" is decided
+- Whether biped's knee four-bar + possible spring is worth replicating —
+  unconfirmed from the teardown photos alone
 
 ## Status
 

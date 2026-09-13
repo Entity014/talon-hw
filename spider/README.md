@@ -19,9 +19,12 @@ Spider-topology legged robot.
   needed, unlike `biped/` — spider is quasi-static like A1 (doesn't need
   active balance to stand), so the same reward structure applies directly.
 - **Weight budget:** ≤ 2 kg total (chassis + battery + electronics + motors)
-- **Leg-joint motor:** shared part with `biped/`'s leg joints (not its wheel
-  motor) — see top-level `README.md`'s "Shared leg-joint motor" section for
-  the torque target and reasoning
+- **Leg-joint motor:** both hip and knee use a GBM3506-class motor
+  (e.g. `iPower GBM3506H-130T`), **direct-drive, no belt/gearbox** — see
+  top-level `README.md`'s "Motor + transmission plan" table. Direct-drive
+  is plausible here (unlike biped's hip) because spider is quasi-static
+  with multiple legs sharing load, keeping per-joint torque need lower.
+  Not yet bench-verified against real continuous-current specs.
 - **Perception:** 2 cameras for stereo depth, feeding a real Exteroception
   signal into the policy (not the scripted `obstacle_dist` placeholder
   `DummyTalonEnv`/`clearance_reward` currently use) — see the fork noted in
@@ -32,8 +35,10 @@ Spider-topology legged robot.
 
 - MCU / compute (onboard inference target) — note stereo depth computation
   itself has a real compute cost; factor this in alongside motor control
-- Specific BLDC module + driver/control board, gear ratio, sized against
-  the 2 kg weight budget
+- Driver/control board selection (SimpleFOCMini vs. moteus-class vs.
+  DYNAMIXEL-class — not decided; no gear ratio needed, direct-drive)
+- Bench-test GBM3506H-130T's real torque/current before fully trusting
+  the KV-derived estimate in the top-level README
 - Power system (battery — voltage must match the BLDC driver + MCU + camera
   compute, not decided yet)
 - Chassis/mechanical structure (3D printed is the likely default at this
