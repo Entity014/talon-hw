@@ -80,6 +80,17 @@ biped-hip-only; nothing else in the plan uses one right now.
   designed yet, only "yes, use a belt" is decided
 - Whether biped's knee four-bar + possible spring is worth replicating —
   unconfirmed from the teardown photos alone
+- **Knee target is lower than hip's, not the same range** — per the
+  original moment-arm estimate, knee torque ≈ half of hip's (shorter
+  moment arm). Don't reuse hip's full torque range for knee's current
+  estimate without halving it first — this was gotten wrong once already
+  in chat discussion (an all-joints-use-the-same-range slip), caught and
+  not committed to any locked number here.
+- **Wheel motor sizing not started.** Current focus is legs only — see
+  `biped/README.md`'s TODO. Wheel needs its own torque derivation from a
+  target speed/acceleration, not the leg-support formula (a chat estimate
+  that reused the leg formula for wheel current was wrong and is not
+  reflected in this file).
 
 ## Status
 

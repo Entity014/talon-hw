@@ -72,6 +72,15 @@
 
 ## TODO before any build work starts
 
+**Current focus: legs only (hip + knee).** Wheel motor/driver sizing is
+explicitly deferred — the earlier current-draw estimate for the wheel
+(quoted in chat, not committed here) reused the leg-support torque formula,
+which doesn't apply to wheel propulsion (a different physics problem —
+$\tau = F \times r$ against a target acceleration/speed, not moment-arm
+support of body weight). Needs its own target (speed, acceleration) before
+any real torque/current number is trustworthy. Revisit after legs are
+settled.
+
 - MCU / compute (onboard inference target) — needs enough headroom for
   balance control (latency-sensitive) *and* stereo depth processing
   simultaneously, not just motor control. **Candidate: Raspberry Pi 4 or
