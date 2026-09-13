@@ -40,6 +40,26 @@ Exteroception signal into the policy. Two ways to get there:
 Leans toward (1) on cost-of-engineering-time grounds (reach for the
 existing module before building the pipeline yourself) — not decided yet.
 
+## Shared leg-joint motor across both platforms
+
+Spider and biped are locked to the same envelope (≤20×20×20cm) and weight
+budget (≤2kg), and the worst-case leg-joint torque estimate (single-leg
+support + 2× dynamic margin) came out to the same target for both —
+**~6 N·m at the hip, ~3 N·m at the knee** (see `biped/README.md`'s torque
+note; assumes ~7-8cm leg segments, revisit once real leg dimensions are
+fixed). Decision: **use the same motor model for both platforms' leg
+joints** — one part to source/stock instead of two, cheaper on a limited
+budget. This does NOT cover biped's wheel motor, which is a separate
+selection (different function — propulsion + balance correction, not
+leg-joint torque — sizing not done yet).
+
+Direct-drive was ruled out (see `biped/README.md`) for backdrivability —
+looking at Quasi-Direct Drive (QDD): large-diameter/pancake BLDC + low
+gear ratio (<10:1), same pattern MIT Mini Cheetah and mjbots' moteus-c1
+target. No specific motor SKU picked yet — search "QDD actuator" /
+mini-cheetah-style actuator kits for concrete parts+pricing rather than
+trusting a part number pasted here, this market moves fast.
+
 ## Status
 
 Scaffold only — no hardware specs locked yet beyond envelope, DoF, weight

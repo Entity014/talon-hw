@@ -10,6 +10,10 @@
   compact envelope means favoring small integrated BLDC+driver modules,
   e.g. gimbal-style or mini-quadruped-actuator form factors, over separate
   large BLDC + external ESC)
+- **Leg-joint motor:** shared part with `spider/`'s leg joints — see
+  top-level `README.md`'s "Shared leg-joint motor" section. The wheel
+  motor (propulsion + balance correction) is a separate, not-yet-sized
+  selection — different loading than a static leg joint.
 - **Reward objective:** must fulfill the full 5-term vector from
   `talon_rl.config.RewardVectorCfg` (progress, clearance, energy, impact,
   smoothness) — same as A1/spider, not a reduced subset — **plus a new 6th
@@ -45,6 +49,14 @@
 - **Weight budget:** ≤ 2 kg total (chassis + battery + electronics + motors)
   — tighter here than it sounds, since biped also carries balance-control
   compute load on top of everything spider/A1 carry
+- **Reference product:** [Mondo Robotics' Beni](https://www.mondorobotics.com/)
+  (Kickstarter 2026) — real, shipping-adjacent 2-wheel dynamic-balance
+  camera robot at 21.6×18×18cm / 1.75kg, can jump ~25cm and self-right if
+  tipped. Confirms this size/weight class is achievable for a 2-wheel
+  balancing robot doing dynamic maneuvers — good feasibility validation.
+  Consumer/Kickstarter marketing pages don't publish internal specs (leg
+  length, motor torque, gear ratio), so it doesn't refine the torque
+  estimate below, only confirms the envelope is realistic.
 - **Perception:** 2 cameras for stereo depth, feeding a real Exteroception
   signal into the policy — same fork noted in the top-level `README.md` on
   off-the-shelf stereo-depth module vs. DIY dual-camera pipeline; for biped

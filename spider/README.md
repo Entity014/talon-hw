@@ -19,6 +19,9 @@ Spider-topology legged robot.
   needed, unlike `biped/` — spider is quasi-static like A1 (doesn't need
   active balance to stand), so the same reward structure applies directly.
 - **Weight budget:** ≤ 2 kg total (chassis + battery + electronics + motors)
+- **Leg-joint motor:** shared part with `biped/`'s leg joints (not its wheel
+  motor) — see top-level `README.md`'s "Shared leg-joint motor" section for
+  the torque target and reasoning
 - **Perception:** 2 cameras for stereo depth, feeding a real Exteroception
   signal into the policy (not the scripted `obstacle_dist` placeholder
   `DummyTalonEnv`/`clearance_reward` currently use) — see the fork noted in
