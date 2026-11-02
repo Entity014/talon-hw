@@ -21,6 +21,11 @@ a *method* across embodiments, via retraining) — but it is a different claim
 than §3.7 makes, and should not be presented as Objective 2 evidence without
 explicitly checking with the thesis advisor first.
 
+`unitree_a1/` is separate from that caveat: it deploys the PROMO-on-A1 policy
+on a real Unitree A1 (formerly the standalone `talon-a1` repo). Same robot the
+policy was trained for, so it is sim-to-real, not cross-embodiment transfer.
+See `unitree_a1/README.md`.
+
 ## Open design fork: stereo depth module
 
 Both platforms plan a 2-camera stereo depth setup feeding a real
