@@ -164,6 +164,7 @@ class Transport {
     const double cr = std::cos(roll_ / 2), sr = std::sin(roll_ / 2), cp = std::cos(pitch_ / 2),
                  sp = std::sin(pitch_ / 2);
     out.quat = {{cr * cp, sr * cp, cr * sp, -sr * sp}};
+    out.tau_est = tau_est_;
     out.keys = keys_;
     out.lx = lx_;
     out.ly = ly_;
@@ -191,6 +192,11 @@ class Transport {
     ry_ = ry;
   }
 
+  void set_tau_est(int joint, double tau) {
+    std::lock_guard<std::mutex> lock(mu_);
+    tau_est_[joint] = tau;
+  }
+
   void set_tilt(double roll, double pitch) {
     std::lock_guard<std::mutex> lock(mu_);
     roll_ = roll;
@@ -209,6 +215,7 @@ class Transport {
   uint32_t tick_ = 0;
   bool freeze_ = false;
   double roll_ = 0.0, pitch_ = 0.0;
+  Joints tau_est_{};
   uint16_t keys_ = 0;
   double lx_ = 0.0, ly_ = 0.0, rx_ = 0.0, ry_ = 0.0;
 };
@@ -270,6 +277,7 @@ class Driver {
       Sensors sen;
       sen.q = s.q;
       sen.dq = s.dq;
+      sen.tau = s.tau_est;
       sen.roll = s.rpy[0];
       sen.pitch = s.rpy[1];
       sen.tick = s.tick;
@@ -335,6 +343,7 @@ PYBIND11_MODULE(_a1_driver, m) {
   faults["bad_target"] = static_cast<uint32_t>(kFaultBadTarget);
   faults["overspeed"] = static_cast<uint32_t>(kFaultOverspeed);
   faults["power_protect"] = static_cast<uint32_t>(kFaultPowerProtect);
+  faults["overtorque"] = static_cast<uint32_t>(kFaultOvertorque);
   m.attr("FAULTS") = faults;
 
   py::dict keys;
@@ -352,6 +361,7 @@ PYBIND11_MODULE(_a1_driver, m) {
       .def_readwrite("state_timeout_s", &SafetyConfig::state_timeout_s)
       .def_readwrite("tilt_limit_rad", &SafetyConfig::tilt_limit_rad)
       .def_readwrite("dq_limit", &SafetyConfig::dq_limit)
+      .def_readwrite("tau_limit", &SafetyConfig::tau_limit)
       .def_readwrite("kp_max", &SafetyConfig::kp_max)
       .def_readwrite("kd_max", &SafetyConfig::kd_max)
       .def_readwrite("damping_kd", &SafetyConfig::damping_kd)
@@ -401,6 +411,7 @@ PYBIND11_MODULE(_a1_driver, m) {
           },
           py::arg("keys"), py::arg("lx") = 0.0, py::arg("ly") = 0.0, py::arg("rx") = 0.0, py::arg("ry") = 0.0)
       .def("sim_set_tilt", [](Driver& d, double roll, double pitch) { d.plant().set_tilt(roll, pitch); })
+      .def("sim_set_tau_est", [](Driver& d, int joint, double tau) { d.plant().set_tau_est(joint, tau); })
       .def("sim_freeze_state", [](Driver& d, bool freeze) { d.plant().freeze_state(freeze); });
 #endif
 }

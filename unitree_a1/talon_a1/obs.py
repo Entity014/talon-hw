@@ -1,6 +1,8 @@
-"""45-D policy observation o_t from a robot state, term for term as PromoObservationsCfg.PolicyCfg.
+"""33-D policy observation x_t from a robot state, term for term as PromoRmaObservationsCfg.PolicyCfg.
 
-Isaac Lab applies no scaling to these terms; the training noise is a training-time corruption only.
+Isaac Lab applies no scaling to these terms and the run manifest has observation_normalization "none"; the
+training noise is a training-time corruption only. The joint position is the raw angle (mdp.joint_pos), not
+relative to the default pose.
 """
 
 import numpy as np
@@ -17,44 +19,32 @@ def projected_gravity(quat_wxyz):
     )
 
 
-class ObservationBuilder(object):
-    def __init__(self):
-        self.last_action = np.zeros(contract.ACT_DIM, dtype=np.float32)
-
-    def reset(self):
-        self.last_action[:] = 0.0
-
-    def build(self, state, command):
-        """state: driver RobotState (SDK joint order). command: (vx, vy, wz) in the body frame."""
-        q = contract.sdk_to_policy(np.asarray(state.q, dtype=np.float32)) - contract.DEFAULT_JOINT_POS
-        dq = contract.sdk_to_policy(np.asarray(state.dq, dtype=np.float32))
-        return np.concatenate(
-            [
-                np.asarray(state.gyro, dtype=np.float32),  # base_ang_vel
-                projected_gravity(state.quat),
-                np.asarray(command, dtype=np.float32),  # velocity_commands
-                q,  # joint_pos_rel
-                dq,  # joint_vel_rel (default joint velocity is 0)
-                self.last_action,  # actions
-            ]
-        )
+def build_observation(state, command):
+    """state: driver RobotState (SDK joint order). command: (vx, vy, wz) in the body frame."""
+    q = contract.sdk_to_policy(np.asarray(state.q, dtype=np.float32))
+    dq = contract.sdk_to_policy(np.asarray(state.dq, dtype=np.float32))
+    return np.concatenate(
+        [
+            np.asarray(state.gyro, dtype=np.float32),  # base_ang_vel
+            projected_gravity(state.quat),
+            np.asarray(command, dtype=np.float32),  # velocity_commands
+            q,  # joint_pos
+            dq,  # joint_vel
+        ]
+    )
 
 
 class History(object):
-    """o_{t-H+1..t}, oldest first. Reset fills every slot with o_0, as train.py does on episode reset."""
+    """(x, a) for the last HIST steps, oldest first. As train.py: zeros on reset, pushed after the action,
+    so phi(buf) at step t has seen up to (x_{t-1}, a_{t-1})."""
 
-    def __init__(self, length=contract.HIST, dim=contract.OBS_DIM):
+    def __init__(self, length=contract.HIST, dim=contract.HIST_DIM):
         self.buf = np.zeros((length, dim), dtype=np.float32)
-        self.empty = True
 
     def reset(self):
-        self.empty = True
+        self.buf[:] = 0.0
 
-    def push(self, o):
-        if self.empty:
-            self.buf[:] = o
-            self.empty = False
-        else:
-            self.buf[:-1] = self.buf[1:]
-            self.buf[-1] = o
+    def push(self, x, a):
+        self.buf[:-1] = self.buf[1:]
+        self.buf[-1] = np.concatenate([x, a])
         return self.buf

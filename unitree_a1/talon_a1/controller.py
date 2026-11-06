@@ -14,7 +14,7 @@ import time
 import numpy as np
 
 from . import contract
-from .obs import History, ObservationBuilder
+from .obs import History, build_observation
 from .remote import Remote, combo
 
 PASSIVE, STAND, WALK = "PASSIVE", "STAND", "WALK"
@@ -31,20 +31,23 @@ def fault_names(mask, table):
 
 
 class Controller(object):
-    def __init__(self, driver, policy, remote=None, fault_table=None, stand_time=3.0, action_clip=4.0, log=None):
+    def __init__(self, driver, policy, remote=None, fault_table=None, stand_time=3.0, action_clip=1.0, log=None,
+                 policy_kp=contract.KP, allow_walk=True):
         self.drv = driver
         self.policy = policy
         self.remote = remote or Remote()
         self.fault_table = fault_table or {}
         self.stand_time = stand_time
         self.action_clip = action_clip
+        self.policy_kp = policy_kp
+        self.allow_walk = allow_walk
         self.log = log
-        self.obs = ObservationBuilder()
+        self.last_action = np.zeros(contract.ACT_DIM, dtype=np.float32)
         self.hist = History()
         self.mode = PASSIVE
         self.ramp_from = None
         self.ramp_t = 0.0
-        self.ramp_time = stand_time
+        self.ramp_legs = []
         self.overruns = 0
 
     # -- state machine --------------------------------------------------------------------------------------
@@ -56,14 +59,26 @@ class Controller(object):
     def _start_ramp(self, state, duration):
         self.ramp_from = contract.sdk_to_policy(np.asarray(state.q, dtype=np.float32))
         self.ramp_t = 0.0
-        self.ramp_time = duration
+        if self.ramp_from[8:12].mean() < contract.LYING_CALF:
+            self.ramp_legs = [(contract.CROUCH_JOINT_POS, duration / 2.0), (contract.DEFAULT_JOINT_POS, duration / 2.0)]
+        else:
+            self.ramp_legs = [(contract.DEFAULT_JOINT_POS, duration)]
 
     def _ramp_target(self):
-        r = min(1.0, self.ramp_t / self.ramp_time)
-        return (1.0 - r) * self.ramp_from + r * contract.DEFAULT_JOINT_POS, r >= 1.0
+        t, start = self.ramp_t, self.ramp_from
+        for pose, duration in self.ramp_legs:
+            if t < duration:
+                r = t / duration
+                return (1.0 - r) * start + r * pose, False
+            t -= duration
+            start = pose
+        return start, True
 
-    def _send(self, q_policy):
-        return self.drv.set_target(list(contract.policy_to_sdk(q_policy).astype(float)), contract.KP, contract.KD)
+    def _send(self, q_policy, kp=contract.KP, kd=contract.KD):
+        return self.drv.set_target(list(contract.policy_to_sdk(q_policy).astype(float)), kp, kd)
+
+    def _send_stand(self, q_policy):
+        return self._send(q_policy, contract.STAND_KP, contract.STAND_KD)
 
     def step(self, state):
         """One 20 ms tick. Returns the record logged for it."""
@@ -88,7 +103,7 @@ class Controller(object):
             if self.remote.pressed(STAND_UP):
                 self._start_ramp(state, self.stand_time)
                 q, _ = self._ramp_target()
-                if self._send(q) and self.drv.arm():
+                if self._send_stand(q) and self.drv.arm():
                     self._set(STAND, "(L1+A)")
                 else:
                     print("[talon_a1] arm refused (no robot state, or a fault)")
@@ -97,10 +112,10 @@ class Controller(object):
         if self.mode == STAND:
             self.ramp_t += contract.POLICY_DT
             q, done = self._ramp_target()
-            self._send(q)
+            self._send_stand(q)
             rec["q_target"] = q
-            if done and self.remote.pressed(START_WALK):
-                self.obs.reset()
+            if done and self.allow_walk and self.remote.pressed(START_WALK):
+                self.last_action[:] = 0.0
                 self.hist.reset()
                 self._set(WALK, "(L1+X)")
             return rec
@@ -111,15 +126,15 @@ class Controller(object):
             self._set(STAND, "(L1+Y)")
             return rec
         command = self.remote.command(state)
-        o = self.obs.build(state, command)
-        hist = self.hist.push(o)
-        a, v_hat = self.policy.action_mean(o, hist)
-        # Training never clipped the action; this bound only stops a wild output. Feed back what was applied.
+        x = build_observation(state, command)
+        a, v_hat, z_hat = self.policy.action_mean(x, self.last_action, self.hist.buf)
+        # The actor's tanh already bounds the mean to +-1; a smaller clip is for bring-up. Feed back what was applied.
         a = np.clip(a, -self.action_clip, self.action_clip).astype(np.float32)
-        self.obs.last_action[:] = a
+        self.hist.push(x, a)
+        self.last_action[:] = a
         q = contract.DEFAULT_JOINT_POS + contract.ACTION_SCALE * a
-        self._send(q)
-        rec.update(command=command, obs=o, action=a, v_hat=v_hat, q_target=q)
+        self._send(q, self.policy_kp)
+        rec.update(command=command, obs=x, action=a, v_hat=v_hat, z_hat=z_hat, q_target=q)
         return rec
 
     # -- loop -----------------------------------------------------------------------------------------------
@@ -148,7 +163,8 @@ class RunLog(object):
     """Per-tick arrays, saved as one .npz. NaN where a field does not apply in that mode."""
 
     FIELDS = (("q", 12), ("dq", 12), ("tau_est", 12), ("quat", 4), ("gyro", 3), ("rpy", 3), ("foot_force", 4))
-    REC = (("command", 3), ("obs", contract.OBS_DIM), ("action", 12), ("v_hat", 3), ("q_target", 12))
+    REC = (("command", 3), ("obs", contract.OBS_DIM), ("action", 12), ("v_hat", contract.VEL_DIM),
+           ("z_hat", contract.LATENT), ("q_target", 12))
 
     def __init__(self):
         self.rows = {name: [] for name, _ in self.FIELDS + self.REC}

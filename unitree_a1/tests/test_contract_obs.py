@@ -3,7 +3,7 @@ import math
 import numpy as np
 
 from talon_a1 import contract
-from talon_a1.obs import History, ObservationBuilder, projected_gravity
+from talon_a1.obs import History, build_observation, projected_gravity
 
 
 class FakeState(object):
@@ -28,6 +28,14 @@ def test_default_pose_inside_sdk_limits():
         assert lo[kind] < q < hi[kind], name
 
 
+def test_default_pose_by_name():
+    # env_cfg.py HIP_THIGH_CALF_DEFAULT: left hips +0.05, right hips -0.05, thigh 0.8, calf -1.4
+    for name, q in zip(contract.POLICY_JOINTS, contract.DEFAULT_JOINT_POS):
+        leg, kind = name.split("_")[:2]
+        want = {"hip": 0.05 if leg[1] == "L" else -0.05, "thigh": 0.8, "calf": -1.4}[kind]
+        assert abs(q - want) < 1e-6, name
+
+
 def test_projected_gravity_known_orientations():
     s = math.sqrt(0.5)
     np.testing.assert_allclose(projected_gravity((1, 0, 0, 0)), [0, 0, -1], atol=1e-7)
@@ -43,28 +51,24 @@ def test_observation_layout():
     q_policy = contract.DEFAULT_JOINT_POS + np.arange(12, dtype=np.float32) * 0.01
     dq_policy = np.arange(12, dtype=np.float32) + 100.0
     state = FakeState(contract.policy_to_sdk(q_policy), contract.policy_to_sdk(dq_policy), gyro=(0.1, 0.2, 0.3))
-    b = ObservationBuilder()
-    b.last_action[:] = 7.0
-    o = b.build(state, (0.5, -0.2, 0.3))
+    o = build_observation(state, (0.5, -0.2, 0.3))
     assert o.shape == (contract.OBS_DIM,) and o.dtype == np.float32
     np.testing.assert_allclose(o[0:3], [0.1, 0.2, 0.3], rtol=1e-6)
     np.testing.assert_allclose(o[3:6], [0, 0, -1])
     np.testing.assert_allclose(o[6:9], [0.5, -0.2, 0.3], rtol=1e-6)
-    np.testing.assert_allclose(o[9:21], np.arange(12) * 0.01, atol=1e-6)
+    np.testing.assert_allclose(o[9:21], q_policy, rtol=1e-6)  # raw angle, not relative to the default pose
     np.testing.assert_allclose(o[21:33], dq_policy)
-    np.testing.assert_allclose(o[33:45], 7.0)
 
 
 def test_history_matches_train_py():
-    # train.py: reset fills all slots with o_0; each step drops the oldest and appends the newest
+    # train.py: zeros on reset; after each action, drop the oldest and append (x, a)
     h = History(length=3, dim=2)
-    a = h.push(np.array([1.0, 1.0]))
-    np.testing.assert_array_equal(a, [[1, 1], [1, 1], [1, 1]])
-    a = h.push(np.array([2.0, 2.0]))
-    np.testing.assert_array_equal(a, [[1, 1], [1, 1], [2, 2]])
-    a = h.push(np.array([3.0, 3.0]))
-    a = h.push(np.array([4.0, 4.0]))
-    np.testing.assert_array_equal(a, [[2, 2], [3, 3], [4, 4]])
+    np.testing.assert_array_equal(h.buf, np.zeros((3, 2)))
+    a = h.push(np.array([1.0]), np.array([-1.0]))
+    np.testing.assert_array_equal(a, [[0, 0], [0, 0], [1, -1]])
+    h.push(np.array([2.0]), np.array([-2.0]))
+    a = h.push(np.array([3.0]), np.array([-3.0]))
+    a = h.push(np.array([4.0]), np.array([-4.0]))
+    np.testing.assert_array_equal(a, [[2, -2], [3, -3], [4, -4]])
     h.reset()
-    a = h.push(np.array([9.0, 9.0]))
-    np.testing.assert_array_equal(a, [[9, 9], [9, 9], [9, 9]])
+    np.testing.assert_array_equal(h.buf, np.zeros((3, 2)))

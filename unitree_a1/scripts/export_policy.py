@@ -1,12 +1,12 @@
-"""Export PROMO's deployable path from a talon-rl research/v1 checkpoint to the NumPy policy file.
+"""Export deployment RMA from a talon-rl Phase-2 checkpoint to the NumPy policy file.
 
-Runs on the training machine, inside the talon-rl environment (needs torch and talon_rl):
+Runs on the training machine, with torch and the talon_rl package from the talon-rl deployment branch:
 
-    uv run --project ../../talon-rl python scripts/export_policy.py \
-        --checkpoint ../../talon-rl/runs/<run>/final.pt --out policies/promo_a1.npz
+    PYTHONPATH=../../talon-rl/src python3 scripts/export_policy.py \
+        --checkpoint policies/phase2_500.pt --out policies/rma_a1.npz
 
 Writes <out> and <out minus .npz>.parity.json. The parity check feeds the same random inputs through the
-PyTorch model and the NumPy port; the export fails if their action means differ by more than --tol.
+PyTorch modules and the NumPy port; the export fails if their actions differ by more than --tol.
 """
 
 import argparse
@@ -21,57 +21,75 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from talon_a1 import contract  # noqa: E402
-from talon_a1.policy import NETS, PromoPolicy, save_policy  # noqa: E402
-from talon_rl.promo.networks import PromoActorCritic, PromoDims  # noqa: E402
-from talon_rl.promo.preference import K, sample_preferences  # noqa: E402
+from talon_a1.policy import RmaPolicy, save_policy  # noqa: E402
+from talon_rl.rma.networks import ACT, K_HIST, AdaptationModule, BasePolicy, VelocityEstimator  # noqa: E402
+
+TASK = "TalonRl-PromoRma-A1"
 
 
-def linear_layers(seq: torch.nn.Sequential) -> list[torch.nn.Linear]:
-    """Checks the Linear, ELU, ..., Linear pattern the NumPy Mlp assumes."""
-    mods = list(seq)
-    for i, m in enumerate(mods):
-        expected = torch.nn.Linear if i % 2 == 0 else torch.nn.ELU
-        if not isinstance(m, expected):
-            raise TypeError(f"layer {i} is {type(m).__name__}, expected {expected.__name__}")
-        if isinstance(m, torch.nn.ELU) and m.alpha != 1.0:
-            raise ValueError(f"ELU alpha {m.alpha} != 1")
-    if not isinstance(mods[-1], torch.nn.Linear):
-        raise TypeError("last layer must be Linear")
-    return mods[::2]
+def load_checkpoint(path: Path) -> dict:
+    """weights_only: the checkpoint is data, so an unexpected pickle global is refused, not run."""
+    numpy_globals = [np._core.multiarray._reconstruct, np.ndarray, np.dtype, np.dtypes.UInt32DType]
+    with torch.serialization.safe_globals(numpy_globals):
+        return torch.load(path, map_location="cpu", weights_only=True)
 
 
-def check_dims(d: PromoDims, manifest: dict | None) -> None:
-    ours = {"obs": contract.OBS_DIM, "act": contract.ACT_DIM, "hist": contract.HIST,
-            "vel_hist": contract.VEL_HIST, "latent": contract.LATENT}
-    theirs = {k: getattr(d, k) for k in ours}
-    if ours != theirs or K != contract.PREF_DIM:
-        raise ValueError(f"PromoDims {theirs}, K={K} disagree with contract.py {ours}, {contract.PREF_DIM}")
-    if manifest:
-        for key, want in (("policy_observation_dim", contract.OBS_DIM), ("preference_dim", contract.PREF_DIM),
-                          ("action_dim", contract.ACT_DIM)):
-            if key in manifest and manifest[key] != want:
-                raise ValueError(f"checkpoint manifest {key}={manifest[key]}, contract.py says {want}")
-        if manifest.get("task") not in (None, "TalonRl-Promo-A1"):
-            print(f"warning: checkpoint task is {manifest['task']!r}, not TalonRl-Promo-A1")
+def check_dims(state: dict) -> None:
+    manifest = state["run_manifest"]
+    want = {"task": TASK, "phase": 2, "state_dim": contract.OBS_DIM, "velocity_dim": contract.VEL_DIM}
+    wrong = {k: manifest.get(k) for k, v in want.items() if manifest.get(k) != v}
+    if wrong:
+        raise ValueError(f"checkpoint manifest {wrong} disagrees with {want}")
+    if state.get("observation_normalizer") is not None or manifest.get("observation_normalization") != "none":
+        raise ValueError("checkpoint uses observation normalization; the NumPy port and obs.py do not apply it")
+    ours = (contract.ACT_DIM, contract.HIST)
+    if ours != (ACT, K_HIST):
+        raise ValueError(f"talon_rl networks (ACT, K_HIST) = {(ACT, K_HIST)}, contract.py says {ours}")
 
 
-def parity(ac: PromoActorCritic, out: Path, n: int, seed: int) -> dict:
+def linears(sd: dict, prefix: str, indices) -> list:
+    return [(sd[f"{prefix}{i}.weight"].cpu().numpy(), sd[f"{prefix}{i}.bias"].cpu().numpy()) for i in indices]
+
+
+def deployable_layers(state: dict) -> dict:
+    """The deployable path only: the critic and the privileged encoder mu never reach the robot."""
+    return {
+        "phi_embed": linears(state["phi"], "embed.", (0, 2)),
+        "phi_conv": linears(state["phi"], "cnn.", (0, 2, 4)),
+        "phi_proj": [(state["phi"]["proj.weight"].cpu().numpy(), state["phi"]["proj.bias"].cpu().numpy())],
+        "velocity": linears(state["velocity_estimator"], "net.", (0, 2, 4)),
+        "actor": linears(state["pi"], "actor.", (0, 2, 4)),
+    }
+
+
+def load_modules(state: dict) -> tuple:
+    d = contract.OBS_DIM
+    pi, phi, velocity = BasePolicy(state_dim=d, velocity_dim=contract.VEL_DIM), AdaptationModule(d), VelocityEstimator(d)
+    pi.load_state_dict(state["pi"])
+    phi.load_state_dict(state["phi"])
+    velocity.load_state_dict(state["velocity_estimator"])
+    return pi.eval(), phi.eval(), velocity.eval()
+
+
+def parity(modules: tuple, out: Path, n: int, seed: int) -> dict:
+    pi, phi, velocity = modules
     g = torch.Generator().manual_seed(seed)
-    anchors = torch.tensor(list(contract.PREFERENCE_ANCHORS.values()), dtype=torch.float32)
-    prefs = torch.cat([anchors, sample_preferences(n - len(anchors), generator=g)])
-    hist = torch.randn(n, contract.HIST, contract.OBS_DIM, generator=g)
-    obs = hist[:, -1]  # o_t is the newest history entry, as at deployment
+    hist = torch.randn(n, contract.HIST, contract.HIST_DIM, generator=g)
+    x = torch.randn(n, contract.OBS_DIM, generator=g)
+    a_prev = torch.randn(n, contract.ACT_DIM, generator=g).clamp(-1.0, 1.0)
     with torch.inference_mode():
-        z_h, v_t = ac.encode_history(hist, prefs)
-        a_t = ac.action_mean(obs, z_h, v_t, prefs)
-    a_err = v_err = 0.0
-    policy = PromoPolicy(out, prefs[0].numpy())
+        z_t = phi(hist)
+        v_t = velocity(hist, z_t)
+        a_t = pi(x, a_prev, z_t, v_t)[0]
+    a_err = v_err = z_err = 0.0
+    policy = RmaPolicy(out)
     for i in range(n):
-        policy.set_preference(prefs[i].numpy())
-        a_np, v_np = policy.action_mean(obs[i].numpy(), hist[i].numpy())
+        a_np, v_np, z_np = policy.action_mean(x[i].numpy(), a_prev[i].numpy(), hist[i].numpy())
         a_err = max(a_err, float(np.abs(a_np - a_t[i].numpy()).max()))
         v_err = max(v_err, float(np.abs(v_np - v_t[i].numpy()).max()))
-    return {"samples": n, "seed": seed, "max_abs_action_error": a_err, "max_abs_v_hat_error": v_err}
+        z_err = max(z_err, float(np.abs(z_np - z_t[i].numpy()).max()))
+    return {"samples": n, "seed": seed, "max_abs_action_error": a_err, "max_abs_v_hat_error": v_err,
+            "max_abs_z_hat_error": z_err}
 
 
 def main() -> None:
@@ -84,22 +102,17 @@ def main() -> None:
     args = p.parse_args()
 
     sha = hashlib.sha256(args.checkpoint.read_bytes()).hexdigest()
-    state = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    d = PromoDims()
-    check_dims(d, state.get("manifest"))
-    ac = PromoActorCritic(d)
-    ac.load_state_dict(state["model"])
-    ac.eval()
+    state = load_checkpoint(args.checkpoint)
+    check_dims(state)
+    modules = load_modules(state)
 
-    layers = {net: [(m.weight.detach().numpy(), m.bias.detach().numpy()) for m in linear_layers(getattr(ac, net))]
-              for net in NETS}
-    meta = {"format": 1, "checkpoint": str(args.checkpoint), "checkpoint_sha256": sha,
-            "iteration": state.get("iteration"), "manifest": state.get("manifest")}
+    meta = {"format": 2, "checkpoint": str(args.checkpoint), "checkpoint_sha256": sha, "iteration": state.get("it"),
+            "task": state["run_manifest"]["task"]}
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    save_policy(args.out, layers, meta)
+    save_policy(args.out, deployable_layers(state), meta)
 
-    report = parity(ac, args.out, args.samples, args.seed)
-    report.update(checkpoint_sha256=sha, iteration=state.get("iteration"), tol=args.tol,
+    report = parity(modules, args.out, args.samples, args.seed)
+    report.update(checkpoint_sha256=sha, iteration=state.get("it"), tol=args.tol,
                   policy_sha256=hashlib.sha256(args.out.read_bytes()).hexdigest(),
                   verdict="PASS" if report["max_abs_action_error"] <= args.tol else "FAIL")
     report_path = args.out.with_suffix(".parity.json")

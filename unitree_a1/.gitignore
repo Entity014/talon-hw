@@ -2,6 +2,8 @@ build/
 /logs/
 policies/*.npz
 policies/*.parity.json
+policies/*.pt
+docs/logs/*.pcap
 talon_a1/_a1_driver*.so
 __pycache__/
 .pytest_cache/

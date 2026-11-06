@@ -24,6 +24,7 @@ enum Fault : uint32_t {
   kFaultBadTarget = 1u << 5,      // non-finite target, or gains outside [0, max]
   kFaultOverspeed = 1u << 6,      // active and |dq| beyond dq_limit
   kFaultPowerProtect = 1u << 7,   // SDK Safety::PowerProtect zeroed a motor mode
+  kFaultOvertorque = 1u << 8,     // active and |tau_est| beyond tau_limit
 };
 
 enum class Mode : int { kDamping = 0, kActive = 1 };
@@ -32,9 +33,10 @@ struct SafetyConfig {
   // talon-rl D2 stale-data contract: <=20 ms normal, 20-40 ms hold the previous target, >40 ms safe stop + latch.
   double target_timeout_s = 0.040;
   double state_timeout_s = 0.050;
-  double tilt_limit_rad = 0.8;
+  double tilt_limit_rad = 0.5;  // past the training terminations (roll 0.4, pitch 0.2) but well before a fall lands
   double dq_limit = 30.0;  // above the 21 rad/s DCMotor limit used in training, so it only trips on faults
-  double kp_max = 40.0;
+  double tau_limit = 30.0;  // N*m; sport mode peaked at 29 walking on the robot, the motor saturates near 33.5
+  double kp_max = 60.0;  // top of the Kp range the deployment RMA policy trained with
   double kd_max = 5.0;
   double damping_kd = 1.0;
   double q_margin = 0.05;  // targets are clamped this far inside the joint limits
@@ -46,6 +48,7 @@ struct SafetyConfig {
 struct Sensors {
   Joints q{};
   Joints dq{};
+  Joints tau{};  // MotorState.tauEst
   double roll = 0.0;
   double pitch = 0.0;
   uint32_t tick = 0;  // LowState.tick, changes with every fresh packet
@@ -139,6 +142,12 @@ class SafetyCore {
       for (double v : s.dq) {
         if (!(std::fabs(v) <= cfg_.dq_limit)) {
           latch(kFaultOverspeed);
+          break;
+        }
+      }
+      for (double v : s.tau) {
+        if (!(std::fabs(v) <= cfg_.tau_limit)) {
+          latch(kFaultOvertorque);
           break;
         }
       }

@@ -14,12 +14,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np  # noqa: E402
 
-from talon_a1 import _a1_driver, contract  # noqa: E402
+from talon_a1 import _a1_driver, contract, sport  # noqa: E402
 from talon_a1.obs import projected_gravity  # noqa: E402
 from talon_a1.remote import KEYS, Remote  # noqa: E402
 
 
 def main():
+    if _a1_driver.WITH_SDK:
+        sport.require_stopped()
     drv = _a1_driver.Driver(_a1_driver.SafetyConfig(), 0.002, 1)
     drv.start()
     remote = Remote(1.0, 1.0, 1.0)

@@ -144,6 +144,54 @@ static void test_tilt_and_overspeed_only_when_active() {
   CHECK(core2.faults() & kFaultOverspeed);
 }
 
+static void test_default_tilt_limit() {
+  SafetyCore core;
+  Sensors s;
+  double t = 0.0;
+  live(core, s, t);
+  core.set_target(stand(), 25.0, 0.5, t);
+  CHECK(core.arm(t));
+  s.roll = 0.45;
+  s.tick += 1;
+  core.step(s, t);
+  CHECK(core.faults() == 0);
+  s.roll = 0.55;
+  s.tick += 1;
+  core.step(s, t);
+  CHECK(core.faults() & kFaultTilt);
+}
+
+static void test_overtorque_only_when_active() {
+  SafetyCore core;
+  Sensors s;
+  double t = 0.0;
+  s.tau[5] = 31.0;
+  live(core, s, t);
+  CHECK(core.faults() == 0);  // the robot is damped, so nothing here is commanding that torque
+  s.tau[5] = 29.0;
+  core.set_target(stand(), 25.0, 0.5, t);
+  CHECK(core.arm(t));
+  s.tick += 1;
+  core.step(s, t);
+  CHECK(core.faults() == 0 && core.mode() == Mode::kActive);
+  s.tau[5] = -31.0;
+  s.tick += 1;
+  MotorCommand c = core.step(s, t);
+  CHECK(core.faults() & kFaultOvertorque);
+  CHECK(core.mode() == Mode::kDamping && c.kp[5] == 0.0);
+
+  SafetyCore core2;
+  Sensors s2;
+  t = 0.0;
+  live(core2, s2, t);
+  core2.set_target(stand(), 25.0, 0.5, t);
+  CHECK(core2.arm(t));
+  s2.tau[0] = std::numeric_limits<double>::quiet_NaN();
+  s2.tick += 1;
+  core2.step(s2, t);
+  CHECK(core2.faults() & kFaultOvertorque);
+}
+
 static void test_joint_clamp() {
   SafetyCore core;
   Sensors s;
@@ -167,6 +215,8 @@ int main() {
   test_estop_button_any_mode();
   test_bad_target();
   test_tilt_and_overspeed_only_when_active();
+  test_default_tilt_limit();
+  test_overtorque_only_when_active();
   test_joint_clamp();
   if (failures == 0) std::printf("test_safety_core: all passed\n");
   return failures == 0 ? 0 : 1;

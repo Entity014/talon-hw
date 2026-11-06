@@ -1,6 +1,6 @@
-"""Run the PROMO policy on the A1 (or on the loopback desk plant when the driver was built without the SDK).
+"""Run the deployment RMA policy on the A1 (or on the loopback desk plant when the driver was built without the SDK).
 
-    python3 scripts/run.py --policy policies/promo_a1.npz --preference balanced
+    python3 scripts/run.py --policy policies/rma_a1.npz
 
 Hang the robot on a gantry for the first runs. Remote combos are listed in talon_a1/controller.py.
 Ctrl-C disarms, leaves the motors damped and writes the run log.
@@ -16,19 +16,10 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from talon_a1 import _a1_driver, contract  # noqa: E402
+from talon_a1 import _a1_driver, contract, sport  # noqa: E402
 from talon_a1.controller import Controller, RunLog  # noqa: E402
-from talon_a1.policy import PromoPolicy  # noqa: E402
+from talon_a1.policy import RmaPolicy  # noqa: E402
 from talon_a1.remote import Remote, combo  # noqa: E402
-
-
-def parse_preference(text):
-    if text in contract.PREFERENCE_ANCHORS:
-        return contract.PREFERENCE_ANCHORS[text]
-    w = [float(v) for v in text.split(",")]
-    if len(w) != contract.PREF_DIM:
-        raise argparse.ArgumentTypeError("preference: an anchor name or three comma-separated weights")
-    return w
 
 
 def desk_demo(drv):
@@ -52,25 +43,39 @@ def wait_for_robot(drv, timeout=1.0):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--policy", required=True)
-    p.add_argument("--preference", type=parse_preference, default="balanced",
-                   help="anchor (%s) or w_track,w_stab,w_eff" % ", ".join(contract.PREFERENCE_ANCHORS))
+    p.add_argument("--action-clip", type=float, default=1.0,
+                   help="bring-up, restrained only: bound on the action in (0, 1], 1 is the trained behaviour")
+    p.add_argument("--kp", type=float, default=contract.KP,
+                   help="bring-up, restrained only: policy Kp in (0, %g], below 50 is outside training" % contract.KP)
+    p.add_argument("--stand-only", action="store_true", help="L1+X does nothing: the policy can never start")
     p.add_argument("--vx-max", type=float, default=0.5)
     p.add_argument("--vy-max", type=float, default=0.3)
     p.add_argument("--wz-max", type=float, default=0.5)
     p.add_argument("--stand-time", type=float, default=3.0)
     p.add_argument("--power-level", type=int, default=1, help="SDK PowerProtect level 1-10, 0 = off")
-    p.add_argument("--tilt-limit", type=float, default=0.8, help="rad, latched fault while armed")
+    p.add_argument("--tilt-limit", type=float, default=0.5, help="rad, latched fault while armed")
+    p.add_argument("--tau-limit", type=float, default=30.0, help="N*m on tau_est, latched fault while armed")
+    p.add_argument("--damping-kd", type=float, default=1.0, help="Kd of the damping mode every fault ends in")
     p.add_argument("--duration", type=float, default=None, help="seconds; default runs until Ctrl-C")
     p.add_argument("--log-dir", default=os.path.join(ROOT, "logs"))
     p.add_argument("--desk-demo", action="store_true", help="loopback build only: scripted remote presses")
     p.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
-    args = p.parse_args()  # argparse also runs `type` on the string default
+    args = p.parse_args()
+    if not 0.0 < args.action_clip <= 1.0:
+        p.error("--action-clip must be in (0, 1]")
+    if not 0.0 < args.kp <= contract.KP:
+        p.error("--kp must be in (0, %g]" % contract.KP)
 
-    policy = PromoPolicy(args.policy, args.preference)
+    policy = RmaPolicy(args.policy)
     cfg = _a1_driver.SafetyConfig()
     cfg.tilt_limit_rad = args.tilt_limit
+    cfg.tau_limit = args.tau_limit
+    if not 0.0 < args.damping_kd <= cfg.kd_max:
+        p.error("--damping-kd must be in (0, %g]" % cfg.kd_max)
+    cfg.damping_kd = args.damping_kd
 
     if _a1_driver.WITH_SDK:
+        sport.require_stopped()
         print("LOW-LEVEL control of the real A1. The robot must hang on the gantry, remote in hand (L2+B = e-stop).")
         if not args.yes:
             input("Press Enter to start the motor loop...")
@@ -87,7 +92,8 @@ def main():
 
     log = RunLog()
     ctl = Controller(drv, policy, Remote(args.vx_max, args.vy_max, args.wz_max), dict(_a1_driver.FAULTS),
-                     stand_time=args.stand_time, log=log)
+                     stand_time=args.stand_time, action_clip=args.action_clip, log=log, policy_kp=args.kp,
+                     allow_walk=not args.stand_only)
     duration = args.duration
     if args.desk_demo:
         desk_demo.t0 = time.monotonic()

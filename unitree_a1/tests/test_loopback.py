@@ -10,7 +10,7 @@ import pytest
 
 from talon_a1 import contract
 from talon_a1.controller import PASSIVE, STAND, WALK, Controller
-from talon_a1.policy import PromoPolicy
+from talon_a1.policy import RmaPolicy
 from talon_a1.remote import combo
 
 _a1_driver = pytest.importorskip("talon_a1._a1_driver")
@@ -25,7 +25,7 @@ def rig(policy_file):
     drv = _a1_driver.Driver(_a1_driver.SafetyConfig(), 0.002, 0)
     drv.start()
     time.sleep(0.05)
-    ctl = Controller(drv, PromoPolicy(policy_file, contract.PREFERENCE_ANCHORS["balanced"]),
+    ctl = Controller(drv, RmaPolicy(policy_file),
                      fault_table=FAULTS, stand_time=0.4, action_clip=0.5)
     yield drv, ctl
     drv.stop()
@@ -98,6 +98,18 @@ def test_tilt_latches_while_armed(rig):
     drv.sim_set_tilt(0.0, 1.0)
     run(ctl, 1, None, drv)
     assert drv.state().faults & FAULTS["tilt"] and ctl.mode == PASSIVE
+
+
+def test_overtorque_latches_while_armed(rig):
+    drv, ctl = rig
+    drv.sim_set_tau_est(5, 31.0)  # ignored while damped
+    time.sleep(0.01)
+    assert drv.state().faults == 0
+    drv.sim_set_tau_est(5, 0.0)
+    stand_up(drv, ctl)
+    drv.sim_set_tau_est(5, -31.0)
+    run(ctl, 1, None, drv)
+    assert drv.state().faults & FAULTS["overtorque"] and ctl.mode == PASSIVE
 
 
 def test_frozen_robot_state_latches(rig):

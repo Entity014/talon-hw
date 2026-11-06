@@ -11,22 +11,25 @@ from talon_a1.policy import save_policy  # noqa: E402
 
 
 def random_layers(seed=0):
-    """Random weights in PromoActorCritic's deployable-path shapes (enc_hidden 256,128; net_hidden 512,256,128)."""
+    """Random weights in the talon_rl.rma.networks deployable-path shapes."""
     rng = np.random.RandomState(seed)
     c = contract
     sizes = {
-        "hist_enc": [c.HIST * c.OBS_DIM + c.PREF_DIM, 256, 128, c.LATENT],
-        "vel_est": [c.LATENT + c.VEL_HIST * c.OBS_DIM, 256, 128, 3],
-        "actor": [c.OBS_DIM + c.LATENT + 3 + c.PREF_DIM, 512, 256, 128, c.ACT_DIM],
+        "phi_embed": [c.HIST_DIM, 32, 32],
+        "phi_proj": [32 * 3, c.LATENT],
+        "velocity": [c.LATENT + c.VEL_HIST * c.OBS_DIM, 128, 64, c.VEL_DIM],
+        "actor": [c.OBS_DIM + c.ACT_DIM + c.LATENT + c.VEL_DIM, 128, 128, c.ACT_DIM],
     }
-    return {
+    layers = {
         net: [(rng.randn(o, i) / np.sqrt(i), 0.1 * rng.randn(o)) for i, o in zip(s[:-1], s[1:])]
         for net, s in sizes.items()
     }
+    layers["phi_conv"] = [(rng.randn(32, 32, k) / np.sqrt(32 * k), 0.1 * rng.randn(32)) for k in (8, 5, 5)]
+    return layers
 
 
 @pytest.fixture
 def policy_file(tmp_path):
     path = str(tmp_path / "policy.npz")
-    save_policy(path, random_layers(), {"format": 1, "test": True})
+    save_policy(path, random_layers(), {"format": 2, "test": True})
     return path
