@@ -23,7 +23,7 @@ enum Fault : uint32_t {
   kFaultEstopSoftware = 1u << 4,  // estop() called
   kFaultBadTarget = 1u << 5,      // non-finite target, or gains outside [0, max]
   kFaultOverspeed = 1u << 6,      // active and |dq| beyond dq_limit
-  kFaultPowerProtect = 1u << 7,   // SDK Safety::PowerProtect zeroed a motor mode
+  kFaultOverpower = 1u << 7,      // active and sum |tau_est * dq| beyond power_limit_w for power_hold_steps in a row
   kFaultOvertorque = 1u << 8,     // active and |tau_est| beyond tau_limit
 };
 
@@ -36,6 +36,8 @@ struct SafetyConfig {
   double tilt_limit_rad = 0.5;  // past the training terminations (roll 0.4, pitch 0.2) but well before a fall lands
   double dq_limit = 30.0;  // above the 21 rad/s DCMotor limit used in training, so it only trips on faults
   double tau_limit = 30.0;  // N*m; sport mode peaked at 29 walking on the robot, the motor saturates near 33.5
+  double power_limit_w = 300.0;  // about twice sport mode's 140 W peak walking on the robot; not yet set from a policy run
+  int power_hold_steps = 10;  // 20 ms at 500 Hz, so one noisy tau_est sample does not stop the robot
   double kp_max = 60.0;  // top of the Kp range the deployment RMA policy trained with
   double kd_max = 5.0;
   double damping_kd = 1.0;
@@ -151,6 +153,12 @@ class SafetyCore {
           break;
         }
       }
+      double power = 0.0;
+      for (int i = 0; i < kNumJoints; ++i) power += std::fabs(s.tau[i] * s.dq[i]);
+      power_over_ = power <= cfg_.power_limit_w ? 0 : power_over_ + 1;
+      if (power_over_ >= cfg_.power_hold_steps) latch(kFaultOverpower);
+    } else {
+      power_over_ = 0;
     }
 
     MotorCommand c;
@@ -166,11 +174,6 @@ class SafetyCore {
       }
     }
     return c;
-  }
-
-  void report_power_protect() {
-    std::lock_guard<std::mutex> lock(mu_);
-    latch(kFaultPowerProtect);
   }
 
  private:
@@ -197,6 +200,7 @@ class SafetyCore {
   uint32_t last_tick_ = 0;
   double last_tick_time_ = -1.0;
   bool state_seen_ = false;
+  int power_over_ = 0;
 };
 
 }  // namespace talon_a1

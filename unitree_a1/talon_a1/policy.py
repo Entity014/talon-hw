@@ -88,6 +88,10 @@ class RmaPolicy(object):
         self.phi_proj = Mlp(*layers["phi_proj"])
         self.velocity = Mlp(*layers["velocity"])
         self.actor = Mlp(*layers["actor"])
+        # The first call took 22 ms on the robot's Atom, then 0.2 ms. Pay it here: at L1+X it adds to the 20 ms tick
+        # and trips the driver's 40 ms stale-target fault before the first action reaches the motors.
+        self.action_mean(np.zeros(contract.OBS_DIM, np.float32), np.zeros(contract.ACT_DIM, np.float32),
+                         np.zeros((contract.HIST, contract.HIST_DIM), np.float32))
 
     def encode_history(self, hist):
         """hist: (HIST, HIST_DIM) oldest first. Returns z_hat (LATENT,), v_hat (VEL_DIM,)."""

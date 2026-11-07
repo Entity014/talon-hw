@@ -204,7 +204,7 @@ def main():
         print("The robot must be %s, hands away from the legs. L2+B, Ctrl-C or a fault ends in damping." % where)
     cfg = _a1_driver.SafetyConfig()
     cfg.tilt_limit_rad = TILT_LIMIT
-    drv = _a1_driver.Driver(cfg, 0.002, 1)
+    drv = _a1_driver.Driver(cfg, 0.002)
     drv.start()
     results, rows, failed = {}, [], None
     try:

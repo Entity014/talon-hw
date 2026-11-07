@@ -22,7 +22,7 @@ from talon_a1.remote import KEYS, Remote  # noqa: E402
 def main():
     if _a1_driver.WITH_SDK:
         sport.require_stopped()
-    drv = _a1_driver.Driver(_a1_driver.SafetyConfig(), 0.002, 1)
+    drv = _a1_driver.Driver(_a1_driver.SafetyConfig(), 0.002)
     drv.start()
     remote = Remote(1.0, 1.0, 1.0)
     np.set_printoptions(precision=3, suppress=True, linewidth=140)

@@ -9,7 +9,7 @@ computer.
  ┌──────────────────────────────────────┐          ┌────────────────────────────────────────┐
  │ remote -> command (vx, vy, wz)       │          │ UDP LowState in  (unitree_legged_sdk)  │
  │ obs.py      x_t (33), history (50)   │ targets  │ SafetyCore: watchdog, clamp, e-stop,   │
- │ policy.py   phi -> v_est -> actor    ├─────────►│   tilt, overspeed, PowerProtect latch  │
+ │ policy.py   phi -> v_est -> actor    ├─────────►│   tilt, overspeed, power, torque latch │
  │ controller  PASSIVE / STAND / WALK   │◄─────────┤ UDP LowCmd out   (Kp/Kd PD on motors)  │
  └──────────────────────────────────────┘  state   └────────────────────────────────────────┘
 ```
@@ -25,9 +25,9 @@ damping. The policy is a NumPy port of `talon_rl.rma.networks`' deployable path 
 | | |
 |---|---|
 | obs `x_t` (33) | base ang vel 3, projected gravity 3, command 3, raw `q` 12, `dq` 12. No scaling or normalization, no `base_lin_vel` (the velocity estimator supplies it) |
-| history | 50 steps of `(x, a)`, oldest first, up to `t-1`; zeros on reset, as in training |
+| history | 50 steps of `(x, a)`, oldest first, up to `t-1`; starts filled with the standing `x` and `a = 0` (training started from zeros) |
 | network | `phi(history) -> z_hat (8)`; `velocity(z_hat, last 5 x) -> v_hat (3)`; `actor(x, a_prev, z_hat, v_hat) -> tanh a (12)` |
-| action | `q_target = q_default + 0.4 a`, PD Kp 55, Kd 0.8, 50 Hz |
+| action | `q_target = q_default + 0.4 a`, PD Kp 55, Kd 0.8, 50 Hz; `--soft-start` eases action and gains in over 1 s after L1+X (not in training) |
 | default pose | hip +0.05 left / -0.05 right, thigh 0.8, calf -1.4 |
 | joint order | policy: type-grouped FL/FR/RL/RR hip, thigh, calf. SDK: FR, FL, RR, RL legs. Remapped by name |
 
@@ -56,8 +56,8 @@ cmake -H. -Bbuild -DUNITREE_SDK_DIR=$HOME/unitree_legged_sdk -Dpybind11_DIR=$(py
 cmake --build build -- -j2
 ```
 
-The SDK library is picked by architecture (`amd64` / `arm64` / `arm32`). Only `comm.h`, `udp.h` and
-`safety.h` are used, so Boost is not needed, but the SDK library itself links against LCM (`liblcm`).
+The SDK library is picked by architecture (`amd64` / `arm64` / `arm32`). Only `comm.h` and `udp.h` are used, so
+Boost is not needed, but the SDK library itself links against LCM (`liblcm`).
 
 ## Policy export (training machine)
 
@@ -89,7 +89,7 @@ Every run writes `logs/run_<time>.npz` (state, obs, action, v_hat, targets, timi
 
 Latched faults (`_a1_driver.FAULTS`): no new target for 40 ms (20–40 ms holds the last one), LowState
 stopped for 50 ms, |roll| or |pitch| > 0.5 rad (`--tilt-limit`), |dq| > 30 rad/s, |tau_est| > 30 N·m
-(`--tau-limit`), bad target / gains, SDK PowerProtect, e-stop. Faults end in damping (`Kp = 0`, Kd from
+(`--tau-limit`), sum |tau_est * dq| > 300 W for 20 ms (`--power-limit`), bad target / gains, e-stop. Faults end in damping (`Kp = 0`, Kd from
 `--damping-kd`), which slows the robot down but does not hold it up. Targets are clamped 0.05 rad inside the
 `a1_const.h` joint limits.
 
@@ -108,7 +108,7 @@ Nothing here has run on a robot yet. In order, with the robot hung on a gantry:
    - sticks: left up = +vx, left = +vy, right stick left = +wz; buttons show up by name.
 4. `scripts/motor_probe.py`, robot lying on the ground: commands each joint 0.1 rad at Kp 5, checks joint,
    direction and gain scale.
-5. `run.py --stand-only --power-level 1`, L1+A only: check the stand ramp and holding the default pose. Standing uses
+5. `run.py --stand-only`, L1+A only: check the stand ramp and holding the default pose. Standing uses
    sport mode's Kp 50, Kd 3 and, from lying, its crouch first; L1+X switches to the policy's Kp 55, Kd 0.75. Compare
    `tau_est` in the log with `Kp (q_target - q) - Kd dq`, then L1+B.
 6. Check timing in the log: `compute_s` p99, `loop_overruns`, `motor_max_period_s`.

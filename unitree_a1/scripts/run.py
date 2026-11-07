@@ -9,6 +9,7 @@ Ctrl-C disarms, leaves the motors damped and writes the run log.
 import argparse
 import json
 import os
+import signal
 import sys
 import threading
 import time
@@ -47,12 +48,16 @@ def main():
                    help="bring-up, restrained only: bound on the action in (0, 1], 1 is the trained behaviour")
     p.add_argument("--kp", type=float, default=contract.KP,
                    help="bring-up, restrained only: policy Kp in (0, %g], below 50 is outside training" % contract.KP)
+    p.add_argument("--action-scale", type=float, default=contract.ACTION_SCALE,
+                   help="rad per unit action in (0, %g]; below it is outside training" % contract.ACTION_SCALE)
+    p.add_argument("--soft-start", type=float, default=1.0,
+                   help="seconds to ease the action and gains in after L1+X, 0 = jump at once")
     p.add_argument("--stand-only", action="store_true", help="L1+X does nothing: the policy can never start")
     p.add_argument("--vx-max", type=float, default=0.5)
     p.add_argument("--vy-max", type=float, default=0.3)
     p.add_argument("--wz-max", type=float, default=0.5)
     p.add_argument("--stand-time", type=float, default=3.0)
-    p.add_argument("--power-level", type=int, default=1, help="SDK PowerProtect level 1-10, 0 = off")
+    p.add_argument("--power-limit", type=float, default=300.0, help="W of sum |tau_est * dq|, latched fault after 20 ms")
     p.add_argument("--tilt-limit", type=float, default=0.5, help="rad, latched fault while armed")
     p.add_argument("--tau-limit", type=float, default=30.0, help="N*m on tau_est, latched fault while armed")
     p.add_argument("--damping-kd", type=float, default=1.0, help="Kd of the damping mode every fault ends in")
@@ -63,6 +68,10 @@ def main():
     args = p.parse_args()
     if not 0.0 < args.action_clip <= 1.0:
         p.error("--action-clip must be in (0, 1]")
+    if not 0.0 < args.action_scale <= contract.ACTION_SCALE:
+        p.error("--action-scale must be in (0, %g]" % contract.ACTION_SCALE)
+    if args.soft_start < 0.0:
+        p.error("--soft-start must not be negative")
     if not 0.0 < args.kp <= contract.KP:
         p.error("--kp must be in (0, %g]" % contract.KP)
 
@@ -70,6 +79,7 @@ def main():
     cfg = _a1_driver.SafetyConfig()
     cfg.tilt_limit_rad = args.tilt_limit
     cfg.tau_limit = args.tau_limit
+    cfg.power_limit_w = args.power_limit
     if not 0.0 < args.damping_kd <= cfg.kd_max:
         p.error("--damping-kd must be in (0, %g]" % cfg.kd_max)
     cfg.damping_kd = args.damping_kd
@@ -84,7 +94,7 @@ def main():
     if args.desk_demo and _a1_driver.WITH_SDK:
         sys.exit("--desk-demo is for the loopback build only")
 
-    drv = _a1_driver.Driver(cfg, 0.002, args.power_level)
+    drv = _a1_driver.Driver(cfg, 0.002)
     drv.start()
     print("motor loop running, SCHED_FIFO: %s" % drv.realtime)
     if not wait_for_robot(drv):
@@ -93,7 +103,8 @@ def main():
     log = RunLog()
     ctl = Controller(drv, policy, Remote(args.vx_max, args.vy_max, args.wz_max), dict(_a1_driver.FAULTS),
                      stand_time=args.stand_time, action_clip=args.action_clip, log=log, policy_kp=args.kp,
-                     allow_walk=not args.stand_only)
+                     allow_walk=not args.stand_only, soft_start=args.soft_start,
+                     action_scale=args.action_scale)
     duration = args.duration
     if args.desk_demo:
         desk_demo.t0 = time.monotonic()
@@ -106,6 +117,9 @@ def main():
     finally:
         drv.disarm()
         drv.stop()
+        # Compressing the log takes seconds on the Atom; a second Ctrl-C here used to lose the whole run.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        print("saving the log, please wait...")
         final = drv.state()
         if not os.path.isdir(args.log_dir):
             os.makedirs(args.log_dir)

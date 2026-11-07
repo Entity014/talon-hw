@@ -192,6 +192,37 @@ static void test_overtorque_only_when_active() {
   CHECK(core2.faults() & kFaultOvertorque);
 }
 
+static void test_overpower_needs_a_sustained_excess() {
+  SafetyCore core;
+  Sensors s;
+  double t = 0.0;
+  // 12 joints at 3 N*m and 10 rad/s: 360 W, above the limit, while torque and speed are each fine
+  s.tau.fill(3.0);
+  s.dq.fill(10.0);
+  live(core, s, t);
+  CHECK(core.faults() == 0);  // ignored while damped
+  core.set_target(stand(), 25.0, 0.5, t);
+  CHECK(core.arm(t));
+  for (int k = 0; k < 9; ++k) {
+    s.tick += 1;
+    core.step(s, t);
+  }
+  CHECK(core.faults() == 0);
+  s.dq.fill(0.0);  // a short spike resets the count
+  s.tick += 1;
+  core.step(s, t);
+  s.dq.fill(10.0);
+  for (int k = 0; k < 9; ++k) {
+    s.tick += 1;
+    core.step(s, t);
+  }
+  CHECK(core.faults() == 0);
+  s.tick += 1;
+  MotorCommand c = core.step(s, t);
+  CHECK(core.faults() & kFaultOverpower);
+  CHECK(core.mode() == Mode::kDamping && c.kp[0] == 0.0);
+}
+
 static void test_joint_clamp() {
   SafetyCore core;
   Sensors s;
@@ -217,6 +248,7 @@ int main() {
   test_tilt_and_overspeed_only_when_active();
   test_default_tilt_limit();
   test_overtorque_only_when_active();
+  test_overpower_needs_a_sustained_excess();
   test_joint_clamp();
   if (failures == 0) std::printf("test_safety_core: all passed\n");
   return failures == 0 ? 0 : 1;

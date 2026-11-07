@@ -21,7 +21,6 @@
 // Not unitree_legged_sdk.h: it pulls in lcm.h (LCM) and loop.h (Boost), neither of which we use.
 #include "unitree_legged_sdk/comm.h"
 #include "unitree_legged_sdk/quadruped.h"
-#include "unitree_legged_sdk/safety.h"
 #include "unitree_legged_sdk/udp.h"
 #endif
 
@@ -82,8 +81,7 @@ static double now_s() {
 
 class Transport {
  public:
-  explicit Transport(int power_level)
-      : udp_(UNITREE_LEGGED_SDK::LOWLEVEL), safe_(UNITREE_LEGGED_SDK::LeggedType::A1), power_level_(power_level) {
+  Transport() : udp_(UNITREE_LEGGED_SDK::LOWLEVEL) {
     udp_.InitCmdData(cmd_);
   }
 
@@ -112,8 +110,8 @@ class Transport {
     out.ry = r.ry;
   }
 
-  // Returns false when PowerProtect tripped (it sets the motor modes to 0 for this frame).
-  bool send(const MotorCommand& c) {
+  // No SDK Safety::PowerProtect: when it trips it calls exit(), which skips damping and loses the run log.
+  void send(const MotorCommand& c) {
     for (int i = 0; i < kNumJoints; ++i) {
       UNITREE_LEGGED_SDK::MotorCmd& m = cmd_.motorCmd[i];
       m.mode = 0x0A;  // servo mode
@@ -123,20 +121,14 @@ class Transport {
       m.Kd = static_cast<float>(c.kd[i]);
       m.tau = static_cast<float>(c.tau[i]);
     }
-    if (power_level_ > 0) safe_.PowerProtect(cmd_, state_, power_level_);
-    bool ok = true;
-    for (int i = 0; i < kNumJoints; ++i) ok = ok && cmd_.motorCmd[i].mode == 0x0A;
     udp_.SetSend(cmd_);
     udp_.Send();
-    return ok;
   }
 
  private:
   UNITREE_LEGGED_SDK::UDP udp_;
-  UNITREE_LEGGED_SDK::Safety safe_;
   UNITREE_LEGGED_SDK::LowCmd cmd_ = {0};
   UNITREE_LEGGED_SDK::LowState state_ = {0};
-  int power_level_;
 };
 
 #else
@@ -145,7 +137,7 @@ class Transport {
 // It only exists to exercise the loop, the safety core and the Python stack; it is not a robot model.
 class Transport {
  public:
-  explicit Transport(int) {
+  Transport() {
     for (int leg = 0; leg < 4; ++leg) {  // lying down, roughly
       q_[3 * leg + 0] = 0.0;
       q_[3 * leg + 1] = 1.1;
@@ -172,7 +164,7 @@ class Transport {
     out.ry = ry_;
   }
 
-  bool send(const MotorCommand& c) {
+  void send(const MotorCommand& c) {
     std::lock_guard<std::mutex> lock(mu_);
     const double dt = 0.002, inertia = 0.05, friction = 0.1;
     for (int i = 0; i < kNumJoints; ++i) {
@@ -180,7 +172,6 @@ class Transport {
       dq_[i] += dt * (tau - friction * dq_[i]) / inertia;
       q_[i] += dt * dq_[i];
     }
-    return true;
   }
 
   void set_remote(uint16_t keys, double lx, double ly, double rx, double ry) {
@@ -224,7 +215,7 @@ class Transport {
 
 class Driver {
  public:
-  Driver(const SafetyConfig& cfg, double dt, int power_level) : core_(cfg), transport_(power_level), dt_(dt) {}
+  Driver(const SafetyConfig& cfg, double dt) : core_(cfg), dt_(dt) {}
   ~Driver() { stop(); }
 
   void start() {
@@ -283,7 +274,7 @@ class Driver {
       sen.tick = s.tick;
       sen.estop_button = (s.keys & kKeyL2) && (s.keys & kKeyB);
       const double t = now_s();
-      if (!transport_.send(core_.step(sen, t))) core_.report_power_protect();
+      transport_.send(core_.step(sen, t));
 
       s.loops += 1;
       s.max_period = std::max(s.max_period, t - last);
@@ -342,7 +333,7 @@ PYBIND11_MODULE(_a1_driver, m) {
   faults["estop_software"] = static_cast<uint32_t>(kFaultEstopSoftware);
   faults["bad_target"] = static_cast<uint32_t>(kFaultBadTarget);
   faults["overspeed"] = static_cast<uint32_t>(kFaultOverspeed);
-  faults["power_protect"] = static_cast<uint32_t>(kFaultPowerProtect);
+  faults["overpower"] = static_cast<uint32_t>(kFaultOverpower);
   faults["overtorque"] = static_cast<uint32_t>(kFaultOvertorque);
   m.attr("FAULTS") = faults;
 
@@ -362,6 +353,7 @@ PYBIND11_MODULE(_a1_driver, m) {
       .def_readwrite("tilt_limit_rad", &SafetyConfig::tilt_limit_rad)
       .def_readwrite("dq_limit", &SafetyConfig::dq_limit)
       .def_readwrite("tau_limit", &SafetyConfig::tau_limit)
+      .def_readwrite("power_limit_w", &SafetyConfig::power_limit_w)
       .def_readwrite("kp_max", &SafetyConfig::kp_max)
       .def_readwrite("kd_max", &SafetyConfig::kd_max)
       .def_readwrite("damping_kd", &SafetyConfig::damping_kd)
@@ -392,8 +384,7 @@ PYBIND11_MODULE(_a1_driver, m) {
       .def_readonly("max_period", &RobotState::max_period);
 
   py::class_<Driver> drv(m, "Driver");
-  drv.def(py::init<const SafetyConfig&, double, int>(), py::arg("cfg"), py::arg("dt") = 0.002,
-          py::arg("power_level") = 1)
+  drv.def(py::init<const SafetyConfig&, double>(), py::arg("cfg"), py::arg("dt") = 0.002)
       .def("start", &Driver::start)
       .def("stop", &Driver::stop, py::call_guard<py::gil_scoped_release>())
       .def("state", &Driver::state)

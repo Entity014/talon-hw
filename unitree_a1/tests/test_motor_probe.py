@@ -60,7 +60,7 @@ def test_box_leaves_out_every_hip():
 @pytest.mark.skipif(_a1_driver.WITH_SDK, reason="needs the loopback build")
 def test_box_run_never_moves_a_hip_target():
     cfg = _a1_driver.SafetyConfig()
-    drv = _a1_driver.Driver(cfg, 0.002, 0)
+    drv = _a1_driver.Driver(cfg, 0.002)
     drv.start()
     time.sleep(0.05)
     rows, results = [], {}
@@ -82,7 +82,7 @@ def test_directions_leave_the_folded_calf_limit():
 @pytest.mark.skipif(_a1_driver.WITH_SDK, reason="needs the loopback build")
 def test_full_run_on_desk():
     cfg = _a1_driver.SafetyConfig()
-    drv = _a1_driver.Driver(cfg, 0.002, 0)
+    drv = _a1_driver.Driver(cfg, 0.002)
     drv.start()
     time.sleep(0.05)
     rows, results = [], {}
@@ -101,7 +101,7 @@ def test_full_run_on_desk():
 @pytest.mark.skipif(_a1_driver.WITH_SDK, reason="needs the loopback build")
 def test_fault_stops_in_damping():
     cfg = _a1_driver.SafetyConfig()
-    drv = _a1_driver.Driver(cfg, 0.002, 0)
+    drv = _a1_driver.Driver(cfg, 0.002)
     drv.start()
     time.sleep(0.05)
     drv.sim_set_remote(0)

@@ -32,7 +32,8 @@ def fault_names(mask, table):
 
 class Controller(object):
     def __init__(self, driver, policy, remote=None, fault_table=None, stand_time=3.0, action_clip=1.0, log=None,
-                 policy_kp=contract.KP, allow_walk=True):
+                 policy_kp=contract.KP, allow_walk=True, soft_start=0.0,
+                 action_scale=contract.ACTION_SCALE):
         self.drv = driver
         self.policy = policy
         self.remote = remote or Remote()
@@ -41,6 +42,9 @@ class Controller(object):
         self.action_clip = action_clip
         self.policy_kp = policy_kp
         self.allow_walk = allow_walk
+        self.soft_start = soft_start
+        self.action_scale = action_scale
+        self.walk_t = 0.0
         self.log = log
         self.last_action = np.zeros(contract.ACT_DIM, dtype=np.float32)
         self.hist = History()
@@ -116,7 +120,8 @@ class Controller(object):
             rec["q_target"] = q
             if done and self.allow_walk and self.remote.pressed(START_WALK):
                 self.last_action[:] = 0.0
-                self.hist.reset()
+                self.walk_t = 0.0
+                self.hist.fill(build_observation(state, self.remote.command(state)))
                 self._set(WALK, "(L1+X)")
             return rec
 
@@ -130,10 +135,15 @@ class Controller(object):
         a, v_hat, z_hat = self.policy.action_mean(x, self.last_action, self.hist.buf)
         # The actor's tanh already bounds the mean to +-1; a smaller clip is for bring-up. Feed back what was applied.
         a = np.clip(a, -self.action_clip, self.action_clip).astype(np.float32)
+        # The settled action is far from 0 (up to 0.99 on the robot), so jumping there jerks the legs when the policy
+        # opens. Ease the action and the gains in from the stand instead; training had no such ramp.
+        self.walk_t += contract.POLICY_DT
+        r = min(1.0, self.walk_t / self.soft_start) if self.soft_start > 0.0 else 1.0
+        a = (r * a).astype(np.float32)
         self.hist.push(x, a)
         self.last_action[:] = a
-        q = contract.DEFAULT_JOINT_POS + contract.ACTION_SCALE * a
-        self._send(q, self.policy_kp)
+        q = contract.DEFAULT_JOINT_POS + self.action_scale * a  # the history keeps the action the policy asked for
+        self._send(q, (1.0 - r) * contract.STAND_KP + r * self.policy_kp, (1.0 - r) * contract.STAND_KD + r * contract.KD)
         rec.update(command=command, obs=x, action=a, v_hat=v_hat, z_hat=z_hat, q_target=q)
         return rec
 

@@ -89,6 +89,55 @@ def test_stand_only_never_starts_the_policy():
     assert all(t[1:] == (contract.STAND_KP, contract.STAND_KD) for t in drv.targets)
 
 
+def test_policy_starts_from_a_history_of_the_current_pose():
+    q0 = contract.DEFAULT_JOINT_POS + 0.05
+    seen = []
+
+    class Recording(FakePolicy):
+        def action_mean(self, x, a_prev, hist):
+            seen.append(hist.copy())
+            return FakePolicy.action_mean(self, x, a_prev, hist)
+
+    drv = FakeDriver()
+    ctl = Controller(drv, Recording(), stand_time=0.1)
+    ctl.step(FakeState(q0))
+    ctl.step(FakeState(q0, combo("L1", "A")))
+    for _ in range(10):
+        ctl.step(FakeState(q0))
+    ctl.step(FakeState(q0, combo("L1", "X")))
+    ctl.step(FakeState(q0))
+    first = seen[0]
+    np.testing.assert_allclose(first[:, 9:21], np.tile(q0, (contract.HIST, 1)), atol=1e-6)  # raw joint angles
+    np.testing.assert_array_equal(first[:, contract.OBS_DIM:], 0.0)  # no action yet
+
+
+def test_soft_start_eases_action_and_gains_from_the_stand():
+    q0 = contract.DEFAULT_JOINT_POS
+    drv, ctl = stand_up(q0, soft_start=1.0)
+    ctl.step(FakeState(q0, combo("L1", "X")))
+    n = len(drv.targets)
+    for _ in range(60):
+        ctl.step(FakeState(q0))
+    walk = drv.targets[n:]
+    offset = np.array([(t[0] - q0).max() for t in walk]) / contract.ACTION_SCALE
+    np.testing.assert_allclose(offset[0], 0.02, atol=1e-5)  # first tick of 50: FakePolicy always asks for 1
+    assert (np.diff(offset[:50]) > 0).all()
+    assert (np.diff(offset[:50]) < 0.03).all()  # no jump
+    np.testing.assert_allclose(offset[49:], 1.0, atol=1e-5)
+    np.testing.assert_allclose(walk[0][1:], (50.1, 2.956))
+    assert walk[-1][1:] == (contract.KP, contract.KD)
+    np.testing.assert_allclose(ctl.last_action, 1.0, atol=1e-6)
+
+
+def test_action_scale_reaches_the_target_but_not_the_history():
+    q0 = contract.DEFAULT_JOINT_POS
+    drv, ctl = stand_up(q0, action_scale=0.3)
+    ctl.step(FakeState(q0, combo("L1", "X")))
+    ctl.step(FakeState(q0))
+    np.testing.assert_allclose(drv.targets[-1][0], q0 + 0.3, atol=1e-5)
+    np.testing.assert_allclose(ctl.hist.buf[-1, contract.OBS_DIM:], 1.0, atol=1e-6)
+
+
 def test_stand_gains_then_policy_gains():
     q0 = contract.DEFAULT_JOINT_POS
     drv, ctl = stand_up(q0)

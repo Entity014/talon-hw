@@ -72,3 +72,9 @@ def test_history_matches_train_py():
     np.testing.assert_array_equal(a, [[2, -2], [3, -3], [4, -4]])
     h.reset()
     np.testing.assert_array_equal(h.buf, np.zeros((3, 2)))
+
+
+def test_history_fill_holds_the_observation_with_zero_action():
+    h = History(length=3, dim=3)
+    h.fill(np.array([1.0, 2.0]))
+    np.testing.assert_array_equal(h.buf, [[1, 2, 0], [1, 2, 0], [1, 2, 0]])

@@ -22,7 +22,7 @@ FAULTS = dict(_a1_driver.FAULTS)
 
 @pytest.fixture
 def rig(policy_file):
-    drv = _a1_driver.Driver(_a1_driver.SafetyConfig(), 0.002, 0)
+    drv = _a1_driver.Driver(_a1_driver.SafetyConfig(), 0.002)
     drv.start()
     time.sleep(0.05)
     ctl = Controller(drv, RmaPolicy(policy_file),
@@ -121,7 +121,7 @@ def test_frozen_robot_state_latches(rig):
 
 
 def test_arm_refused_without_robot(policy_file):
-    drv = _a1_driver.Driver(_a1_driver.SafetyConfig(), 0.002, 0)
+    drv = _a1_driver.Driver(_a1_driver.SafetyConfig(), 0.002)
     drv.start()
     drv.sim_freeze_state(True)  # tick never changes: no robot talking
     time.sleep(0.05)

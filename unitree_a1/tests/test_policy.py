@@ -32,6 +32,14 @@ def test_shapes_and_determinism(policy_file):
     assert np.array_equal(a, a2)
 
 
+def test_first_call_happens_while_loading(policy_file, monkeypatch):
+    calls = []
+    original = RmaPolicy.action_mean
+    monkeypatch.setattr(RmaPolicy, "action_mean", lambda self, *a: calls.append(1) or original(self, *a))
+    RmaPolicy(policy_file)
+    assert calls
+
+
 def test_history_changes_action(policy_file):
     p = RmaPolicy(policy_file)
     x = np.ones(contract.OBS_DIM, np.float32)

@@ -35,14 +35,19 @@ def build_observation(state, command):
 
 
 class History(object):
-    """(x, a) for the last HIST steps, oldest first. As train.py: zeros on reset, pushed after the action,
-    so phi(buf) at step t has seen up to (x_{t-1}, a_{t-1})."""
+    """(x, a) for the last HIST steps, oldest first. As train.py: pushed after the action, so phi(buf) at step t
+    has seen up to (x_{t-1}, a_{t-1}). Training resets to zeros; see fill() for what deployment starts from."""
 
     def __init__(self, length=contract.HIST, dim=contract.HIST_DIM):
         self.buf = np.zeros((length, dim), dtype=np.float32)
 
     def reset(self):
         self.buf[:] = 0.0
+
+    def fill(self, x):
+        """Every slot is (x, a = 0). Unlike training's zeros: on the robot zeros gave z_hat[0] = 4.96 against about
+        -0.5 once settled, which threw the front hips outward for the first 0.1 s."""
+        self.buf[:] = np.concatenate([x, np.zeros(self.buf.shape[1] - len(x), dtype=np.float32)])
 
     def push(self, x, a):
         self.buf[:-1] = self.buf[1:]
