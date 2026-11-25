@@ -58,3 +58,23 @@ def test_rejects_contract_mismatch(policy_file, tmp_path):
     np.savez(bad, **data)
     with pytest.raises(ValueError, match="action_scale"):
         RmaPolicy(bad)
+
+
+def test_onnx_policy_loading_and_inference():
+    import os
+    from talon_a1.policy import OnnxPolicy, load_policy
+    onnx_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "policies", "base_v2", "policy.onnx")
+    if not os.path.exists(onnx_path):
+        pytest.skip("base_v2/policy.onnx not found")
+    p = load_policy(onnx_path)
+    assert isinstance(p, OnnxPolicy)
+    assert p.obs_dim == 45
+    assert p.hist_len == 10
+    assert p.action_scale == 0.25
+
+    obs = np.zeros(p.obs_dim, dtype=np.float32)
+    hist = np.zeros((p.hist_len, p.obs_dim), dtype=np.float32)
+    act = p.action_mean(obs, hist)
+    assert act.shape == (12,)
+    assert act.dtype == np.float32
+

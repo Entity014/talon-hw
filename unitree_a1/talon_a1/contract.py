@@ -32,7 +32,20 @@ def policy_to_sdk(x):
     return np.asarray(x)[POLICY_INDEX_OF_SDK]
 
 
-# env_cfg.py HIP_THIGH_CALF_DEFAULT, policy order
+# PROMO v2 default pose:
+# hip: FL/RL +0.1, FR/RR -0.1
+# thigh: front 0.8, rear 1.0
+# calf: -1.5
+DEFAULT_JOINT_POS_PROMO_V2 = np.array(
+    [0.1, -0.1, 0.1, -0.1, 0.8, 0.8, 1.0, 1.0, -1.5, -1.5, -1.5, -1.5], dtype=np.float32
+)
+ACTION_SCALE_PROMO_V2 = 0.25
+OBS_DIM_PROMO_V2 = 45
+HIST_LEN_PROMO_V2 = 10
+W_DIM_PROMO_V2 = 3
+DEFAULT_W_PROMO_V2 = np.array([1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0], dtype=np.float32)
+
+# env_cfg.py HIP_THIGH_CALF_DEFAULT, policy order (RMA legacy)
 DEFAULT_JOINT_POS = np.array(
     [0.05, -0.05, 0.05, -0.05, 0.8, 0.8, 0.8, 0.8, -1.4, -1.4, -1.4, -1.4], dtype=np.float32
 )

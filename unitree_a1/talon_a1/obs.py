@@ -34,6 +34,27 @@ def build_observation(state, command):
     )
 
 
+def build_observation_promo_v2(state, command, last_action, default_q=contract.DEFAULT_JOINT_POS_PROMO_V2):
+    """45-D observation layout for PROMO v2 / base_v2 / oursA.
+
+    [base_ang_vel_body(3), projected_gravity(3), command_vx_vy_wz(3),
+     joint_pos_minus_default(12), joint_vel(12), last_action(12)]
+    """
+    q = contract.sdk_to_policy(np.asarray(state.q, dtype=np.float32))
+    dq = contract.sdk_to_policy(np.asarray(state.dq, dtype=np.float32))
+    last_act = np.asarray(last_action, dtype=np.float32)
+    return np.concatenate(
+        [
+            np.asarray(state.gyro, dtype=np.float32),
+            projected_gravity(state.quat),
+            np.asarray(command, dtype=np.float32),
+            q - default_q,
+            dq,
+            last_act,
+        ]
+    )
+
+
 class History(object):
     """(x, a) for the last HIST steps, oldest first. As train.py: pushed after the action, so phi(buf) at step t
     has seen up to (x_{t-1}, a_{t-1}). Training resets to zeros; see fill() for what deployment starts from."""
@@ -53,3 +74,30 @@ class History(object):
         self.buf[:-1] = self.buf[1:]
         self.buf[-1] = np.concatenate([x, a])
         return self.buf
+
+
+class PromoHistory(object):
+    """History buffer for PROMO v2 models (base_v2, oursA).
+    Buffer shape: (H, obs_dim), oldest first.
+    According to policy_meta.json:
+    - At start and after every reset, fill with obs repeated H times.
+    - Updated per step: hist = concat(hist[1:], obs) BEFORE calling the policy, so hist[-1] == obs.
+    """
+
+    def __init__(self, length=contract.HIST_LEN_PROMO_V2, dim=contract.OBS_DIM_PROMO_V2):
+        self.length = length
+        self.dim = dim
+        self.buf = np.zeros((length, dim), dtype=np.float32)
+
+    def reset(self):
+        self.buf[:] = 0.0
+
+    def fill(self, obs):
+        self.buf[:] = np.asarray(obs, dtype=np.float32)
+
+    def push_obs(self, obs):
+        """Roll and append obs before calling policy."""
+        self.buf[:-1] = self.buf[1:]
+        self.buf[-1] = np.asarray(obs, dtype=np.float32)
+        return self.buf
+

@@ -20,9 +20,16 @@ from talon_a1.remote import KEYS, Remote  # noqa: E402
 
 
 def main():
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument("--flip-imu-x", action="store_true", default=False, help="rotate IMU 180 deg about X")
+    args = p.parse_args()
+
     if _a1_driver.WITH_SDK:
         sport.require_stopped()
-    drv = _a1_driver.Driver(_a1_driver.SafetyConfig(), 0.002)
+    cfg = _a1_driver.SafetyConfig()
+    cfg.flip_imu_x = args.flip_imu_x
+    drv = _a1_driver.Driver(cfg, 0.002)
     drv.start()
     remote = Remote(1.0, 1.0, 1.0)
     np.set_printoptions(precision=3, suppress=True, linewidth=140)

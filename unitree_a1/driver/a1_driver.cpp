@@ -265,6 +265,26 @@ class Driver {
     RobotState s;
     while (running_) {
       transport_.receive(s);
+      if (core_.cfg().flip_imu_x) {
+        // Rotate IMU measurements 180 deg about X:
+        // Quat: multiply by (w=0, x=1, y=0, z=0) -> (w'=-x, x'=w, y'=z, z'=-y)
+        const double w = s.quat[0], x = s.quat[1], y = s.quat[2], z = s.quat[3];
+        s.quat[0] = -x;
+        s.quat[1] = w;
+        s.quat[2] = z;
+        s.quat[3] = -y;
+        // RPY: roll wrapped by pi, pitch and yaw inverted
+        double r = s.rpy[0] > 0.0 ? s.rpy[0] - M_PI : s.rpy[0] + M_PI;
+        s.rpy[0] = r;
+        s.rpy[1] = -s.rpy[1];
+        s.rpy[2] = -s.rpy[2];
+        // Gyro & Accel: Y and Z inverted
+        s.gyro[1] = -s.gyro[1];
+        s.gyro[2] = -s.gyro[2];
+        s.acc[1] = -s.acc[1];
+        s.acc[2] = -s.acc[2];
+      }
+
       Sensors sen;
       sen.q = s.q;
       sen.dq = s.dq;
@@ -358,6 +378,7 @@ PYBIND11_MODULE(_a1_driver, m) {
       .def_readwrite("kd_max", &SafetyConfig::kd_max)
       .def_readwrite("damping_kd", &SafetyConfig::damping_kd)
       .def_readwrite("q_margin", &SafetyConfig::q_margin)
+      .def_readwrite("flip_imu_x", &SafetyConfig::flip_imu_x)
       .def_readwrite("q_min", &SafetyConfig::q_min)
       .def_readwrite("q_max", &SafetyConfig::q_max);
 

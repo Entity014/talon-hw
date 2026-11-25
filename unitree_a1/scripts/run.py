@@ -19,7 +19,7 @@ sys.path.insert(0, ROOT)
 
 from talon_a1 import _a1_driver, contract, sport  # noqa: E402
 from talon_a1.controller import Controller, RunLog  # noqa: E402
-from talon_a1.policy import RmaPolicy  # noqa: E402
+from talon_a1.policy import OnnxPolicy, RmaPolicy, load_policy  # noqa: E402
 from talon_a1.remote import Remote, combo  # noqa: E402
 
 
@@ -44,12 +44,15 @@ def wait_for_robot(drv, timeout=1.0):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--policy", required=True)
-    p.add_argument("--action-clip", type=float, default=1.0,
-                   help="bring-up, restrained only: bound on the action in (0, 1], 1 is the trained behaviour")
-    p.add_argument("--kp", type=float, default=contract.KP,
-                   help="bring-up, restrained only: policy Kp in (0, %g], below 50 is outside training" % contract.KP)
-    p.add_argument("--action-scale", type=float, default=contract.ACTION_SCALE,
-                   help="rad per unit action in (0, %g]; below it is outside training" % contract.ACTION_SCALE)
+    p.add_argument("--action-clip", type=float, default=None,
+                   help="bound on |action|. Default: 1 for the RMA policy (tanh-bounded), 10 for PROMO npz/onnx policies, "
+                        "whose output is linear and needs |a| > 1 to step (clipping at 1 made oursA lean and never walk)")
+    p.add_argument("--kp", type=float, default=None,
+                   help="bring-up, restrained only: policy Kp, below 50 is outside training (default from policy)")
+    p.add_argument("--action-scale", type=float, default=None,
+                   help="rad per unit action; below default is outside training (default from policy)")
+    p.add_argument("--w", nargs=3, type=float, default=[0.333, 0.333, 0.334],
+                   help="preference vector w = (track, stab, eff), for PROMO models (default: balanced 0.333 0.333 0.334)")
     p.add_argument("--soft-start", type=float, default=1.0,
                    help="seconds to ease the action and gains in after L1+X, 0 = jump at once")
     p.add_argument("--stand-only", action="store_true", help="L1+X does nothing: the policy can never start")
@@ -61,25 +64,36 @@ def main():
     p.add_argument("--tilt-limit", type=float, default=0.5, help="rad, latched fault while armed")
     p.add_argument("--tau-limit", type=float, default=30.0, help="N*m on tau_est, latched fault while armed")
     p.add_argument("--damping-kd", type=float, default=1.0, help="Kd of the damping mode every fault ends in")
+    p.add_argument("--flip-imu-x", action="store_true", default=False,
+                   help="rotate IMU frame 180 deg about X (fixes inverted IMU on certain A1 units)")
     p.add_argument("--duration", type=float, default=None, help="seconds; default runs until Ctrl-C")
     p.add_argument("--log-dir", default=os.path.join(ROOT, "logs"))
     p.add_argument("--desk-demo", action="store_true", help="loopback build only: scripted remote presses")
     p.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
     args = p.parse_args()
-    if not 0.0 < args.action_clip <= 1.0:
-        p.error("--action-clip must be in (0, 1]")
-    if not 0.0 < args.action_scale <= contract.ACTION_SCALE:
-        p.error("--action-scale must be in (0, %g]" % contract.ACTION_SCALE)
+    policy = load_policy(args.policy, w=args.w)
+    base_action_scale = getattr(policy, "action_scale", contract.ACTION_SCALE)
+    base_kp = getattr(policy, "kp", contract.KP)
+
+    action_scale = args.action_scale if args.action_scale is not None else base_action_scale
+    policy_kp = args.kp if args.kp is not None else base_kp
+
+    if args.action_clip is None:
+        args.action_clip = 10.0 if hasattr(policy, "hist_len") else 1.0
+    if not 0.0 < args.action_clip <= 10.0:
+        p.error("--action-clip must be in (0, 10]")
+    if not 0.0 < action_scale <= base_action_scale:
+        p.error("--action-scale must be in (0, %g]" % base_action_scale)
     if args.soft_start < 0.0:
         p.error("--soft-start must not be negative")
-    if not 0.0 < args.kp <= contract.KP:
-        p.error("--kp must be in (0, %g]" % contract.KP)
+    if not 0.0 < policy_kp <= base_kp:
+        p.error("--kp must be in (0, %g]" % base_kp)
 
-    policy = RmaPolicy(args.policy)
     cfg = _a1_driver.SafetyConfig()
     cfg.tilt_limit_rad = args.tilt_limit
     cfg.tau_limit = args.tau_limit
     cfg.power_limit_w = args.power_limit
+    cfg.flip_imu_x = args.flip_imu_x
     if not 0.0 < args.damping_kd <= cfg.kd_max:
         p.error("--damping-kd must be in (0, %g]" % cfg.kd_max)
     cfg.damping_kd = args.damping_kd
@@ -100,11 +114,12 @@ def main():
     if not wait_for_robot(drv):
         print("warning: LowState.tick is not changing; arming will be refused until the robot answers")
 
-    log = RunLog()
+    obs_dim = getattr(policy, "obs_dim", contract.OBS_DIM)
+    log = RunLog(obs_dim=obs_dim)
     ctl = Controller(drv, policy, Remote(args.vx_max, args.vy_max, args.wz_max), dict(_a1_driver.FAULTS),
-                     stand_time=args.stand_time, action_clip=args.action_clip, log=log, policy_kp=args.kp,
+                     stand_time=args.stand_time, action_clip=args.action_clip, log=log, policy_kp=policy_kp,
                      allow_walk=not args.stand_only, soft_start=args.soft_start,
-                     action_scale=args.action_scale)
+                     action_scale=action_scale, w=args.w)
     duration = args.duration
     if args.desk_demo:
         desk_demo.t0 = time.monotonic()

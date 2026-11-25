@@ -78,3 +78,28 @@ def test_history_fill_holds_the_observation_with_zero_action():
     h = History(length=3, dim=3)
     h.fill(np.array([1.0, 2.0]))
     np.testing.assert_array_equal(h.buf, [[1, 2, 0], [1, 2, 0], [1, 2, 0]])
+
+
+def test_promo_observation_and_history():
+    from talon_a1.obs import PromoHistory, build_observation_promo_v2
+
+    q_policy = contract.DEFAULT_JOINT_POS_PROMO_V2 + np.arange(12, dtype=np.float32) * 0.01
+    dq_policy = np.arange(12, dtype=np.float32) + 10.0
+    last_action = np.ones(12, dtype=np.float32) * 0.5
+    state = FakeState(contract.policy_to_sdk(q_policy), contract.policy_to_sdk(dq_policy), gyro=(0.1, 0.2, 0.3))
+    o = build_observation_promo_v2(state, (0.5, -0.2, 0.3), last_action)
+
+    assert o.shape == (contract.OBS_DIM_PROMO_V2,) and o.dtype == np.float32
+    np.testing.assert_allclose(o[0:3], [0.1, 0.2, 0.3], rtol=1e-6)
+    np.testing.assert_allclose(o[3:6], [0, 0, -1])
+    np.testing.assert_allclose(o[6:9], [0.5, -0.2, 0.3], rtol=1e-6)
+    np.testing.assert_allclose(o[9:21], q_policy - contract.DEFAULT_JOINT_POS_PROMO_V2, rtol=1e-6)
+    np.testing.assert_allclose(o[21:33], dq_policy, rtol=1e-6)
+    np.testing.assert_allclose(o[33:45], last_action, rtol=1e-6)
+
+    ph = PromoHistory(length=3, dim=4)
+    ph.fill(np.array([1, 2, 3, 4], dtype=np.float32))
+    np.testing.assert_array_equal(ph.buf, [[1, 2, 3, 4], [1, 2, 3, 4], [1, 2, 3, 4]])
+    ph.push_obs(np.array([5, 6, 7, 8], dtype=np.float32))
+    np.testing.assert_array_equal(ph.buf, [[1, 2, 3, 4], [1, 2, 3, 4], [5, 6, 7, 8]])
+

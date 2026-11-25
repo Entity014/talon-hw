@@ -40,8 +40,9 @@ struct SafetyConfig {
   int power_hold_steps = 10;  // 20 ms at 500 Hz, so one noisy tau_est sample does not stop the robot
   double kp_max = 60.0;  // top of the Kp range the deployment RMA policy trained with
   double kd_max = 5.0;
-  double damping_kd = 1.0;
+  double damping_kd = 2.8;
   double q_margin = 0.05;  // targets are clamped this far inside the joint limits
+  bool flip_imu_x = false;  // rotate IMU frame 180 deg about X (fixes inverted IMU boards/firmware)
   // a1_const.h joint limits per joint type (hip, thigh, calf)
   std::array<double, 3> q_min = {{-0.802, -1.05, -2.7}};
   std::array<double, 3> q_max = {{0.802, 4.19, -0.916}};
@@ -112,6 +113,8 @@ class SafetyCore {
     mode_ = Mode::kDamping;
     target_time_ = -1.0;
   }
+
+  const SafetyConfig& cfg() const { return cfg_; }
 
   Mode mode() const {
     std::lock_guard<std::mutex> lock(mu_);
