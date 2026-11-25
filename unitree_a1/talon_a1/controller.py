@@ -20,6 +20,19 @@ from .remote import Remote, combo
 
 PASSIVE, STAND, CROUCH_DOWN, WALK = "PASSIVE", "STAND", "CROUCH_DOWN", "WALK"
 
+# Uniform observation noise of the PROMO / oursA training task (observation layout of build_observation_promo_v2):
+# gyro +-0.2, projected gravity +-0.05, command 0, joint_pos +-0.01, joint_vel +-1.5, last_action 0.
+TRAIN_OBS_NOISE = np.concatenate([np.full(3, 0.2), np.full(3, 0.05), np.zeros(3), np.full(12, 0.01), np.full(12, 1.5), np.zeros(12)]).astype(np.float32)
+
+
+def obs_noise_amplitude(scale=0.0, dq=None):
+    """Per-channel amplitude of the noise added to the observation of a PROMO policy: `scale` x the training noise on every channel, and if `dq` is given
+    the joint_vel channels get exactly `dq` rad/s (so dq=1.5 with scale=0 is the dq-only A/B test). Returns None when nothing is added."""
+    amp = TRAIN_OBS_NOISE * float(scale)
+    if dq is not None:
+        amp[21:33] = float(dq)
+    return amp if np.any(amp > 0) else None
+
 STAND_UP = combo("L1", "A")
 START_WALK = combo("L1", "X")
 STOP_WALK = combo("L1", "Y")
@@ -34,7 +47,7 @@ def fault_names(mask, table):
 class Controller(object):
     def __init__(self, driver, policy, remote=None, fault_table=None, stand_time=3.0, action_clip=1.0, log=None,
                  policy_kp=None, allow_walk=True, soft_start=0.0,
-                 action_scale=None, default_joint_pos=None, w=None):
+                 action_scale=None, default_joint_pos=None, w=None, obs_noise=None, noise_seed=0, lead_ms=0.0):
         self.drv = driver
         self.policy = policy
         self.remote = remote or Remote()
@@ -73,6 +86,9 @@ class Controller(object):
             policy.set_preference(self.w)
 
         self.walk_t = 0.0
+        self.obs_noise = None if obs_noise is None else np.asarray(obs_noise, dtype=np.float32)  # uniform +- amplitude per observation channel (PROMO layout), None = no noise
+        self.rng = np.random.default_rng(noise_seed)
+        self.lead_s = float(lead_ms) / 1000.0  # lead compensation of a PROMO observation: joint_pos += joint_vel * lead (a guess of where the joint is when the delayed command acts); 0 = off
         self.log = log
         self.last_action = np.zeros(contract.ACT_DIM, dtype=np.float32)
 
@@ -93,6 +109,15 @@ class Controller(object):
         if mode != self.mode:
             print("[talon_a1] %s -> %s %s" % (self.mode, mode, why))
         self.mode = mode
+
+    def _noisy(self, x):
+        """The observation the policy gets: x with the optional lead compensation, plus uniform noise per channel (as in training, where the noise is on the observation that enters the history), or x itself."""
+        if self.lead_s != 0.0:
+            x = x.copy()
+            x[9:21] += x[21:33] * self.lead_s  # PROMO layout: joint_pos_minus_default 9:21, joint_vel 21:33
+        if self.obs_noise is None:
+            return x
+        return (x + self.rng.uniform(-1.0, 1.0, x.shape).astype(np.float32) * self.obs_noise).astype(np.float32)
 
     def _start_ramp(self, state, duration):
         self.ramp_from = contract.sdk_to_policy(np.asarray(state.q, dtype=np.float32))
@@ -173,7 +198,7 @@ class Controller(object):
                 self.walk_t = 0.0
                 cmd = self.remote.command(state)
                 if self.is_promo:
-                    init_obs = build_observation_promo_v2(state, cmd, self.last_action, self.default_joint_pos)
+                    init_obs = self._noisy(build_observation_promo_v2(state, cmd, self.last_action, self.default_joint_pos))
                     self.hist.fill(init_obs)
                 else:
                     self.hist.fill(build_observation(state, cmd))
@@ -188,7 +213,7 @@ class Controller(object):
         command = self.remote.command(state)
 
         if self.is_promo:
-            x = build_observation_promo_v2(state, command, self.last_action, self.default_joint_pos)
+            x = self._noisy(build_observation_promo_v2(state, command, self.last_action, self.default_joint_pos))
             self.hist.push_obs(x)
             a = self.policy.action_mean(x, self.hist.buf, self.w)
             v_hat = None

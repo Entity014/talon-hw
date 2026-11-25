@@ -18,7 +18,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from talon_a1 import _a1_driver, contract, sport  # noqa: E402
-from talon_a1.controller import Controller, RunLog  # noqa: E402
+from talon_a1.controller import Controller, RunLog, obs_noise_amplitude  # noqa: E402
 from talon_a1.policy import OnnxPolicy, RmaPolicy, load_policy  # noqa: E402
 from talon_a1.remote import Remote, combo  # noqa: E402
 
@@ -66,6 +66,11 @@ def main():
     p.add_argument("--damping-kd", type=float, default=1.0, help="Kd of the damping mode every fault ends in")
     p.add_argument("--flip-imu-x", action="store_true", default=False,
                    help="rotate IMU frame 180 deg about X (fixes inverted IMU on certain A1 units)")
+    p.add_argument("--obs-noise-scale", type=float, default=0.0,
+                   help="PROMO policies only: add the TRAINING observation noise (gyro 0.2, gravity 0.05, joint_pos 0.01, joint_vel 1.5, uniform +-) times this scale to the observation the policy sees. 0 = none (default). The real dq is much cleaner than the training noise: this is the A/B test of that mismatch")
+    p.add_argument("--dq-noise", type=float, default=None, help="PROMO policies only: uniform +- noise on joint_vel in rad/s (overrides the joint_vel channel of --obs-noise-scale); --dq-noise 1.5 alone is the dq-only A/B test")
+    p.add_argument("--noise-seed", type=int, default=0)
+    p.add_argument("--lead-ms", type=float, default=0.0, help="PROMO policies only: lead compensation, joint_pos seen by the policy += joint_vel x lead (ms). 0 = off. In simulation it did not help (bounce 0.52 -> 0.49-0.51 at 15 ms delay); kept as an A/B option for the robot, where the delay structure may differ")
     p.add_argument("--duration", type=float, default=None, help="seconds; default runs until Ctrl-C")
     p.add_argument("--log-dir", default=os.path.join(ROOT, "logs"))
     p.add_argument("--desk-demo", action="store_true", help="loopback build only: scripted remote presses")
@@ -119,7 +124,8 @@ def main():
     ctl = Controller(drv, policy, Remote(args.vx_max, args.vy_max, args.wz_max), dict(_a1_driver.FAULTS),
                      stand_time=args.stand_time, action_clip=args.action_clip, log=log, policy_kp=policy_kp,
                      allow_walk=not args.stand_only, soft_start=args.soft_start,
-                     action_scale=action_scale, w=args.w)
+                     action_scale=action_scale, w=args.w,
+                     obs_noise=obs_noise_amplitude(args.obs_noise_scale, args.dq_noise) if hasattr(policy, "hist_len") else None, noise_seed=args.noise_seed, lead_ms=args.lead_ms if hasattr(policy, "hist_len") else 0.0)
     duration = args.duration
     if args.desk_demo:
         desk_demo.t0 = time.monotonic()
