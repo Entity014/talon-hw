@@ -170,7 +170,8 @@ def run_trial(drv, policy, segments, args, w, log_path, meta, sleep=True, fault_
     log = RunLog(obs_dim=getattr(policy, "obs_dim", contract.OBS_DIM))
     ctl = Controller(drv, policy, remote, dict(fault_table or {}), stand_time=args.stand_time, action_clip=args.action_clip, log=log,
                      policy_kp=args.policy_kp, allow_walk=True, soft_start=args.soft_start, action_scale=args.action_scale, w=w,
-                     obs_noise=obs_noise_amplitude(getattr(args, "obs_noise_scale", 0.0), getattr(args, "dq_noise", None)) if hasattr(policy, "hist_len") else None, noise_seed=getattr(args, "noise_seed", 0), lead_ms=getattr(args, "lead_ms", 0.0) if hasattr(policy, "hist_len") else 0.0)
+                     obs_noise=obs_noise_amplitude(getattr(args, "obs_noise_scale", 0.0), getattr(args, "dq_noise", None)) if hasattr(policy, "hist_len") else None, noise_seed=getattr(args, "noise_seed", 0), lead_ms=getattr(args, "lead_ms", 0.0) if hasattr(policy, "hist_len") else 0.0,
+                     action_smooth=getattr(args, "action_smooth", 0.0), imu_zero=getattr(args, "imu_zero", False))
     tr = Trial(ctl, segments)
     t0 = time.monotonic(); next_t = t0
     while True:
@@ -223,10 +224,13 @@ def main():
     p.add_argument("--power-limit", type=float, default=300.0)
     p.add_argument("--damping-kd", type=float, default=1.0)
     p.add_argument("--flip-imu-x", action="store_true")
+    p.add_argument("--imu-zero", action="store_true", help="auto-calibrate IMU roll/pitch bias in STAND before WALK")
+    p.add_argument("--interactive", action="store_true", help="shortcut menu: a=replay, b=move_fast, c=move_slow, w=preference, q=quit")
     p.add_argument("--yes", action="store_true")
     p.add_argument("--obs-noise-scale", type=float, default=0.0, help="the dq A/B test: training observation noise x this scale added to the observation (see run.py)")
-    p.add_argument("--dq-noise", type=float, default=None, help="uniform +- noise on joint_vel (rad/s) added to the observation (see run.py)")
+    p.add_argument("--dq-noise", type=float, default=0.1, help="uniform +- noise on joint_vel (rad/s) added to the observation (see run.py); default 0.1 from hardware tuning")
     p.add_argument("--noise-seed", type=int, default=0)
+    p.add_argument("--action-smooth", type=float, default=0.0, help="EMA action smoothing factor in [0, 1) to damp motor chatter (see run.py)")
     p.add_argument("--lead-ms", type=float, default=0.0, help="lead compensation of the observation in ms (see run.py); 0 = off")
     p.add_argument("--rest-s", type=float, default=0.0, help="wait this many seconds between trials (motors cool down)")
     args = p.parse_args()
@@ -258,6 +262,40 @@ def main():
     manifest_path = os.path.join(args.out_dir, "manifest.json")
     manifest = []
     try:
+        if args.interactive:
+            shortcuts = {"a": "replay", "b": "move_fast", "c": "move_slow"}
+            pref_names = list(PREFERENCES)
+            pref_idx = pref_names.index(args.preferences[0]) if args.preferences else 0
+            trial_num = 0
+            while True:
+                pref = pref_names[pref_idx]
+                ans = input("\n[pref=%s] a=replay, b=move_fast, c=move_slow, w=switch pref, q=quit: " % pref).strip().lower()
+                if ans == "q":
+                    break
+                if ans == "w":
+                    pref_idx = (pref_idx + 1) % len(pref_names)
+                    continue
+                if ans not in shortcuts:
+                    print("  unknown key (use a, b, c, w, or q)")
+                    continue
+                reg = shortcuts[ans]
+                trial_num += 1
+                w = np.array(PREFERENCES[pref], dtype=np.float32)
+                name = "%02d_%s_%s" % (trial_num, pref, reg)
+                meta = {"index": trial_num, "preference": pref, "w": [float(x) for x in w], "regime": reg, "trial": trial_num, "seed": args.seed, "policy": os.path.basename(args.policy)}
+                if hasattr(policy, "set_preference"):
+                    policy.set_preference(w)
+                entry = run_trial(drv, policy, REGIMES[reg], args, w, os.path.join(args.out_dir, name + ".npz"), meta, fault_table=dict(_a1_driver.FAULTS))
+                print("   -> %s  faults %s  walk %.1f s" % (entry["outcome"], entry["faults"], entry["walk_time_s"] or 0.0))
+                manifest.append(entry)
+                with open(manifest_path, "w") as f:
+                    json.dump(manifest, f, indent=1)
+                if entry["outcome"] == "FAULT":
+                    print("   FAULT: clear it with SELECT on the remote before the next run")
+                    input("   press Enter when the fault is cleared and the robot is safe... ")
+                    drv.clear_faults()
+            return
+
         for i, (pref, reg, k) in enumerate(cells):
             w = np.array(PREFERENCES[pref], dtype=np.float32)
             name = "%02d_%s_%s_t%d" % (i + 1, pref, reg, k + 1)

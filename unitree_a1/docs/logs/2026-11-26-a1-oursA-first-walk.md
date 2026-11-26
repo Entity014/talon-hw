@@ -15,7 +15,7 @@ Policy: `policies/oursA/policy.npz` (OURS-A, `final.pt` iteration 5000, sha256 `
 
 - **ไม่ใช่สาเหตุ (ทดสอบใน sim):** IMU roll bias ±0.067 rad, noise ของ dq/gyro, Kd 0.75
 - **Latency:** `scripts/latency_probe.py --box --flip-imu-x` วัดได้ `tau_est` ตอบหลังสั่ง median 9.0 ms (5.1–10.2) ส่วน `q` ขยับหลัง 24.5 ms ซึ่งรวมเวลาเร่งของขาที่ Kp 15 ไม่ใช่ delay ล้วน
-- **Sim + delay (MuJoCo, ไม่ clip):** delay 5–15 ms ทำให้ขวา/หมุนซ้ายเสียและเด้งเพิ่ม แต่ผลรายทิศไม่นิ่ง (หมุนซ้ายพังที่ 5 ms ผ่านที่ 10 ms) ตรงกับอาการบนหุ่น ยังไม่ถือว่ายืนยันว่า delay เป็นต้นเหตุเดียว เพราะหุ่นจริงยังก้าวถี่กว่า sim ที่ delay 15 ms (5.2 Hz)
+- **Sim + delay (MuJoCo, ไม่ clip, *ไม่มี observation noise*):** delay 5–15 ms ทำให้ขวา/หมุนซ้ายเสียและเด้งเพิ่ม แต่ผลรายทิศไม่นิ่ง (หมุนซ้ายพังที่ 5 ms ผ่านที่ 10 ms) **ข้อสรุปว่า delay เป็นต้นเหตุถูกแก้ในหัวข้อ 5:** sim รอบนี้ไม่มี noise ซึ่งต่างจากตอนเทรน เมื่อใส่ noise เท่าตอนเทรน balanced w ผ่านครบทิศที่ delay 10 ms
 - **เปเปอร์ PROMO** (arXiv 2610.01260) ใช้ Go2 และไม่ได้สุ่มหรือรายงาน latency (Table B.2 สุ่มแค่ friction, มวลฐาน, แรง/ทอร์กรบกวน, push)
 
 ## 3. ปรับ w ตอน deploy โดยไม่เทรนใหม่
@@ -34,11 +34,25 @@ Policy: `policies/oursA/policy.npz` (OURS-A, `final.pt` iteration 5000, sha256 `
 
 IMU ผิดทิศ (roll ใกล้ ±π) ต้องใช้ `--flip-imu-x` ในทุกรอบที่ล็อกไว้วันนี้ ผู้ทดสอบแจ้งว่าแก้ที่ IMU แล้ว แต่รอบหลังยังใส่ flag นี้ ควรตรวจ roll/pitch ตอนยืนด้วย `inspect_sensors.py` ก่อนตัดสินใจเอาออก
 
+## 5. แก้ข้อสรุปเรื่อง delay: observation noise ตอนเทรน (sim เท่านั้น)
+
+task ที่ใช้เทรน OURS-A (BaselineLowMem-Vertex) เปิด `enable_corruption` ที่ policy group: noise แบบ uniform gyro ±0.2 rad/s, projected gravity ±0.05, joint_pos ±0.01 rad, joint_vel ±1.5 rad/s (command และ last_action ไม่มี noise) ส่วน sweep ใน sim ข้างต้นไม่มี noise ผลเมื่อใส่ noise (oursA, balanced w, 3 seed):
+
+| เงื่อนไข (delay 10 ms) | ผล (fwd/back/left/right/yawL/yawR) |
+|---|---|
+| ไม่มี noise | ผ่าน 3–4 จาก 6 (ขวาและหมุนเสีย) |
+| noise ครบทุกช่อง | ผ่านครบ 6 ทุก seed (delay 0 ก็ครบ) |
+| เฉพาะ joint_vel ±1.5 | ผ่านครบ 6 ทุก seed |
+| เฉพาะ joint_vel ±0.5 | ยังเสียบางทิศ |
+| เฉพาะ gyro, gravity หรือ joint_pos | ยังเสียหมุน/ขวา |
+
+`dq` จริงบนหุ่นสะอาดกว่าตอนเทรน (std ราว 0.09 ตอนยืนนิ่ง เทียบ ~0.87 ของ noise ตอนเทรน) สมมติฐานปัจจุบัน: policy เรียนรู้ที่จะไม่เชื่อ `dq` แต่บนหุ่น `dq` แม่นและมี delay จึงตอบสนองแรงเกินไป **ยังไม่ได้ทดสอบบนหุ่น** การทดสอบที่ตัดสินได้คือใส่ noise เท่าตอนเทรนเข้า obs บนหุ่น (อย่างน้อย `dq` ±1.5) delay ยังทำให้เด้งเพิ่มเล็กน้อยใน sim ที่มี noise (0.28 → 0.32) แต่ไม่พอทำให้เสียทิศ
+
 ## ยังไม่ทำ / ยังไม่รู้
 
-- ยังไม่รู้ว่าทำไมหุ่นเด้งมากกว่า sim ที่ใส่ delay แล้ว ยังไม่ได้ตรวจ motor model ตอนเทรน (Isaac DC motor) เทียบ MuJoCo (clip คงที่ 33.5 Nm) และยังไม่ได้ตรวจว่า OURS-A เทรนด้วย observation noise หรือไม่
-- ข้อเสนอ: เทรน OURS-A ใหม่พร้อมสุ่ม action delay 0–20 ms แล้วทดสอบใน MuJoCo ที่ delay 0/10/20 ms ก่อนลงหุ่น คงชุด baseline เดิมไว้เทียบใน sim
-- ใน sim ที่ delay 0 BASE-v2 เดินได้แค่ไปข้างหน้า (ถอยหลัง ข้าง และหมุนไม่ได้) จึงไม่ใช่ทางเลือกแทน OURS-A
+- **ยังไม่ควรเทรนใหม่เพื่อ delay** จนกว่าจะทดสอบการใส่ noise บนหุ่น ข้อเสนอเดิมในหัวข้อนี้ (สุ่ม delay 0–20 ms) ถูกถอนไว้ก่อน
+- หุ่นจริงยังเด้งมากกว่า sim ที่มี noise ครบ (gyro std 0.4–0.65 เทียบ 0.32) ยังไม่ได้ตรวจ motor model ตอนเทรน (Isaac DC motor) เทียบ MuJoCo (clip คงที่ 33.5 Nm), friction/damping ข้อต่อ (task นี้ไม่สุ่ม และ actuator friction = 0, ไม่มี armature) และ passive damping ใน USD ของ A1
+- ใน sim ที่ delay 0 BASE-v2 เดินได้แค่ไปข้างหน้า (ถอยหลัง ข้าง และหมุนไม่ได้) ยังไม่ได้ยืนยันกับ `.pt` ของ base_v2 จึงไม่ใช่ทางเลือกแทน OURS-A
 - `policies/` ถูก ignore จาก git แล้ว ไฟล์ `final.pt` ไม่มี backup ใน git
 
 ## คำสั่งรอบล่าสุด

@@ -70,6 +70,18 @@ def main():
                    help="PROMO policies only: add the TRAINING observation noise (gyro 0.2, gravity 0.05, joint_pos 0.01, joint_vel 1.5, uniform +-) times this scale to the observation the policy sees. 0 = none (default). The real dq is much cleaner than the training noise: this is the A/B test of that mismatch")
     p.add_argument("--dq-noise", type=float, default=None, help="PROMO policies only: uniform +- noise on joint_vel in rad/s (overrides the joint_vel channel of --obs-noise-scale); --dq-noise 1.5 alone is the dq-only A/B test")
     p.add_argument("--noise-seed", type=int, default=0)
+    p.add_argument("--action-smooth", type=float, default=0.0,
+                   help="EMA action smoothing factor alpha in [0, 1): a_applied = (1 - alpha) * a_new + alpha * a_prev. 0 = off, recommended 0.2-0.4 to reduce hardware shaking/chatter")
+    p.add_argument("--pitch-bias", type=float, default=0.0,
+                   help="rad: flex rear calves (RL/RR) in WALK to pitch nose up and shift weight off front legs (try 0.05-0.12)")
+    p.add_argument("--front-lift-bias", type=float, default=0.0,
+                   help="rad: flex front thigh/calf (FL/FR) proportional to forward cmd vx > 0 to increase front foot clearance (try 0.05-0.12)")
+    p.add_argument("--imu-roll-bias", type=float, default=0.0,
+                   help="rad: subtract static IMU roll mounting offset from projected_gravity (e.g. 0.07)")
+    p.add_argument("--imu-pitch-bias", type=float, default=0.0,
+                   help="rad: subtract static IMU pitch mounting offset from projected_gravity")
+    p.add_argument("--imu-zero", action="store_true",
+                   help="auto-calibrate imu-roll-bias and imu-pitch-bias from STAND pose right before L1+X")
     p.add_argument("--lead-ms", type=float, default=0.0, help="PROMO policies only: lead compensation, joint_pos seen by the policy += joint_vel x lead (ms). 0 = off. In simulation it did not help (bounce 0.52 -> 0.49-0.51 at 15 ms delay); kept as an A/B option for the robot, where the delay structure may differ")
     p.add_argument("--duration", type=float, default=None, help="seconds; default runs until Ctrl-C")
     p.add_argument("--log-dir", default=os.path.join(ROOT, "logs"))
@@ -87,6 +99,8 @@ def main():
         args.action_clip = 10.0 if hasattr(policy, "hist_len") else 1.0
     if not 0.0 < args.action_clip <= 10.0:
         p.error("--action-clip must be in (0, 10]")
+    if not 0.0 <= args.action_smooth < 1.0:
+        p.error("--action-smooth must be in [0, 1)")
     if not 0.0 < action_scale <= base_action_scale:
         p.error("--action-scale must be in (0, %g]" % base_action_scale)
     if args.soft_start < 0.0:
@@ -125,7 +139,9 @@ def main():
                      stand_time=args.stand_time, action_clip=args.action_clip, log=log, policy_kp=policy_kp,
                      allow_walk=not args.stand_only, soft_start=args.soft_start,
                      action_scale=action_scale, w=args.w,
-                     obs_noise=obs_noise_amplitude(args.obs_noise_scale, args.dq_noise) if hasattr(policy, "hist_len") else None, noise_seed=args.noise_seed, lead_ms=args.lead_ms if hasattr(policy, "hist_len") else 0.0)
+                     obs_noise=obs_noise_amplitude(args.obs_noise_scale, args.dq_noise) if hasattr(policy, "hist_len") else None, noise_seed=args.noise_seed, lead_ms=args.lead_ms if hasattr(policy, "hist_len") else 0.0,
+                     action_smooth=args.action_smooth, pitch_bias=args.pitch_bias, front_lift_bias=args.front_lift_bias,
+                     imu_roll_bias=args.imu_roll_bias, imu_pitch_bias=args.imu_pitch_bias, imu_zero=args.imu_zero)
     duration = args.duration
     if args.desk_demo:
         desk_demo.t0 = time.monotonic()

@@ -19,6 +19,24 @@ def projected_gravity(quat_wxyz):
     )
 
 
+def correct_projected_gravity(g, roll_bias=0.0, pitch_bias=0.0):
+    """Remove static IMU mounting roll/pitch offsets from projected_gravity.
+
+    Convention matches Unitree/Isaac RPY: when level robot has positive roll_bias,
+    g_y = -sin(roll_bias); positive pitch_bias gives g_x = -sin(pitch_bias).
+    """
+    if roll_bias == 0.0 and pitch_bias == 0.0:
+        return g
+    gx, gy, gz = float(g[0]), float(g[1]), float(g[2])
+    if roll_bias != 0.0:
+        cr, sr = np.cos(roll_bias), np.sin(roll_bias)
+        gy, gz = cr * gy - sr * gz, sr * gy + cr * gz
+    if pitch_bias != 0.0:
+        cp, sp = np.cos(-pitch_bias), np.sin(-pitch_bias)
+        gx, gz = cp * gx + sp * gz, -sp * gx + cp * gz
+    return np.array([gx, gy, gz], dtype=np.float32)
+
+
 def build_observation(state, command):
     """state: driver RobotState (SDK joint order). command: (vx, vy, wz) in the body frame."""
     q = contract.sdk_to_policy(np.asarray(state.q, dtype=np.float32))

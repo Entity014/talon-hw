@@ -194,6 +194,8 @@ def main():
     p.add_argument("--log-dir", default=os.path.join(ROOT, "logs"))
     p.add_argument("--auto", action="store_true", help="loopback build only: no Enter between joints")
     p.add_argument("--box", action="store_true", help="feet off the ground on a box: Kp 15, thigh and calf only")
+    p.add_argument("--flip-imu-x", action="store_true", default=False,
+                   help="rotate IMU frame 180 deg about X (fixes inverted IMU on certain A1 units)")
     args = p.parse_args()
 
     if _a1_driver.WITH_SDK:
@@ -204,6 +206,7 @@ def main():
         print("The robot must be %s, hands away from the legs. L2+B, Ctrl-C or a fault ends in damping." % where)
     cfg = _a1_driver.SafetyConfig()
     cfg.tilt_limit_rad = TILT_LIMIT
+    cfg.flip_imu_x = args.flip_imu_x
     drv = _a1_driver.Driver(cfg, 0.002)
     drv.start()
     results, rows, failed = {}, [], None

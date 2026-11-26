@@ -14,7 +14,7 @@ import time
 import numpy as np
 
 from . import contract
-from .obs import History, PromoHistory, build_observation, build_observation_promo_v2
+from .obs import History, PromoHistory, build_observation, build_observation_promo_v2, correct_projected_gravity, projected_gravity
 from .policy import OnnxPolicy, PromoNumpyPolicy
 from .remote import Remote, combo
 
@@ -47,7 +47,9 @@ def fault_names(mask, table):
 class Controller(object):
     def __init__(self, driver, policy, remote=None, fault_table=None, stand_time=3.0, action_clip=1.0, log=None,
                  policy_kp=None, allow_walk=True, soft_start=0.0,
-                 action_scale=None, default_joint_pos=None, w=None, obs_noise=None, noise_seed=0, lead_ms=0.0):
+                 action_scale=None, default_joint_pos=None, w=None, obs_noise=None, noise_seed=0, lead_ms=0.0,
+                 action_smooth=0.0, pitch_bias=0.0, front_lift_bias=0.0,
+                 imu_roll_bias=0.0, imu_pitch_bias=0.0, imu_zero=False):
         self.drv = driver
         self.policy = policy
         self.remote = remote or Remote()
@@ -56,6 +58,13 @@ class Controller(object):
         self.action_clip = action_clip
         self.allow_walk = allow_walk
         self.soft_start = soft_start
+        self.action_smooth = float(action_smooth)  # EMA smoothing factor alpha in [0, 1): a_applied = (1 - alpha) * a_new + alpha * a_prev (0 = no smoothing)
+        self.pitch_bias = float(pitch_bias)  # rad: flex rear calves in WALK to shift weight off front legs
+        self.front_lift_bias = float(front_lift_bias)  # rad: flex front thigh/calf proportional to forward cmd (vx > 0)
+        self.imu_roll_bias = float(imu_roll_bias)
+        self.imu_pitch_bias = float(imu_pitch_bias)
+        self.imu_zero = bool(imu_zero)
+        self._stand_g_buf = []
 
         # Detect PROMO v2 policy (ONNX or pure NumPy)
         self.is_promo = isinstance(policy, (OnnxPolicy, PromoNumpyPolicy))
@@ -110,8 +119,16 @@ class Controller(object):
             print("[talon_a1] %s -> %s %s" % (self.mode, mode, why))
         self.mode = mode
 
+    def _apply_imu_bias(self, x):
+        if self.imu_roll_bias == 0.0 and self.imu_pitch_bias == 0.0:
+            return x
+        x = x.copy()
+        x[3:6] = correct_projected_gravity(x[3:6], self.imu_roll_bias, self.imu_pitch_bias)
+        return x
+
     def _noisy(self, x):
-        """The observation the policy gets: x with the optional lead compensation, plus uniform noise per channel (as in training, where the noise is on the observation that enters the history), or x itself."""
+        """The observation the policy gets: x with the optional IMU bias and lead compensation, plus uniform noise per channel (as in training, where the noise is on the observation that enters the history), or x itself."""
+        x = self._apply_imu_bias(x)
         if self.lead_s != 0.0:
             x = x.copy()
             x[9:21] += x[21:33] * self.lead_s  # PROMO layout: joint_pos_minus_default 9:21, joint_vel 21:33
@@ -193,7 +210,17 @@ class Controller(object):
             q, done = self._ramp_target()
             self._send_stand(q)
             rec["q_target"] = q
+            if done and self.imu_zero:
+                self._stand_g_buf.append(projected_gravity(state.quat))
+                if len(self._stand_g_buf) > 25:
+                    self._stand_g_buf.pop(0)
             if done and self.allow_walk and self.remote.pressed(START_WALK):
+                if self.imu_zero and self._stand_g_buf:
+                    g_avg = np.mean(self._stand_g_buf, axis=0)
+                    self.imu_pitch_bias = float(np.arctan2(-g_avg[0], -g_avg[2]))
+                    self.imu_roll_bias = float(np.arctan2(-g_avg[1], -g_avg[2]))
+                    print("[talon_a1] imu_zero calibrated: roll_bias=%.4f rad, pitch_bias=%.4f rad"
+                          % (self.imu_roll_bias, self.imu_pitch_bias))
                 self.last_action[:] = 0.0
                 self.walk_t = 0.0
                 cmd = self.remote.command(state)
@@ -219,11 +246,16 @@ class Controller(object):
             v_hat = None
             z_hat = None
         else:
-            x = build_observation(state, command)
+            x = self._apply_imu_bias(build_observation(state, command))
             a, v_hat, z_hat = self.policy.action_mean(x, self.last_action, self.hist.buf)
 
         # RMA's tanh bounds the mean to +-1; PROMO actors are linear and need |a| > 1 to step, so run.py raises the clip for them. Feed back what was applied.
         a = np.clip(a, -self.action_clip, self.action_clip).astype(np.float32)
+
+        # Action EMA low-pass filtering to damp high-frequency chatter on real hardware
+        if self.action_smooth > 0.0:
+            a = ((1.0 - self.action_smooth) * a + self.action_smooth * self.last_action).astype(np.float32)
+
         # The settled action is far from 0 (up to 0.99 on the robot), so jumping there jerks the legs when the policy
         # opens. Ease the action and the gains in from the stand instead; training had no such ramp.
         self.walk_t += contract.POLICY_DT
@@ -235,6 +267,13 @@ class Controller(object):
 
         self.last_action[:] = a
         q = self.default_joint_pos + self.action_scale * a
+        if self.pitch_bias != 0.0:
+            q[10:12] -= r * self.pitch_bias  # RL_calf, RR_calf
+        if self.front_lift_bias != 0.0 and command[0] > 0.0:
+            vx_scale = max(float(getattr(self.remote, "vx_max", 0.5)), 1e-6)
+            fwd = min(1.0, float(command[0]) / vx_scale)
+            q[4:6] -= r * fwd * 0.5 * self.front_lift_bias  # FL_thigh, FR_thigh
+            q[8:10] -= r * fwd * self.front_lift_bias  # FL_calf, FR_calf
         self._send(q, (1.0 - r) * contract.STAND_KP + r * self.policy_kp, (1.0 - r) * contract.STAND_KD + r * contract.KD)
         rec.update(command=command, obs=x, action=a, q_target=q)
         if v_hat is not None:
