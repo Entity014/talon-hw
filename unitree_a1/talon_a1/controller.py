@@ -243,7 +243,7 @@ class Controller(object):
             x = self._noisy(build_observation_promo_v2(state, command, self.last_action, self.default_joint_pos))
             self.hist.push_obs(x)
             a = self.policy.action_mean(x, self.hist.buf, self.w)
-            v_hat = None
+            v_hat = getattr(self.policy, "last_v_hat", None)  # NumPy PROMO policy only; None for ONNX
             z_hat = None
         else:
             x = self._apply_imu_bias(build_observation(state, command))

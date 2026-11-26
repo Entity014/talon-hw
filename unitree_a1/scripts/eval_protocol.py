@@ -32,9 +32,10 @@ PREFERENCES = {  # the four preferences of the PROMO hardware study (w = track, 
     "efficiency": (0.1, 0.1, 0.8),
 }
 
+# replay is a closed path: every move is followed by its opposite at the same speed and duration (fwd/back 0.3 m/s 4 s, left/right 0.2 m/s 4 s, yaw +/-0.4 rad/s 4 s), so the commanded net displacement and heading change are zero and the end pose error measures the robot, not the profile. (Before 2026-11-27 forward was 0.4 m/s 6 s: net +1.2 m, not comparable.)
 # command regimes: list of (duration s, (vx, vy, wz)); the command moves linearly between segments in RAMP seconds. The paper does not state its speeds or durations: these are ours.
 REGIMES = {
-    "replay": [(2.0, (0, 0, 0)), (6.0, (0.4, 0, 0)), (2.0, (0, 0, 0)), (4.0, (-0.3, 0, 0)), (2.0, (0, 0, 0)), (4.0, (0, 0.2, 0)), (2.0, (0, 0, 0)), (4.0, (0, -0.2, 0)), (2.0, (0, 0, 0)), (4.0, (0, 0, 0.4)), (2.0, (0, 0, 0)), (4.0, (0, 0, -0.4)), (2.0, (0, 0, 0))],
+    "replay": [(2.0, (0, 0, 0)), (4.0, (0.3, 0, 0)), (2.0, (0, 0, 0)), (4.0, (-0.3, 0, 0)), (2.0, (0, 0, 0)), (4.0, (0, 0.2, 0)), (2.0, (0, 0, 0)), (4.0, (0, -0.2, 0)), (2.0, (0, 0, 0)), (4.0, (0, 0, 0.4)), (2.0, (0, 0, 0)), (4.0, (0, 0, -0.4)), (2.0, (0, 0, 0))],
     "move_fast": [(2.0, (0, 0, 0)), (10.0, (0.5, 0, 0)), (2.0, (0, 0, 0))],
     "move_slow": [(2.0, (0, 0, 0)), (14.0, (0.25, 0, 0)), (2.0, (0, 0, 0))],
 }

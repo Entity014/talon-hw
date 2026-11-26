@@ -274,6 +274,7 @@ class PromoNumpyPolicy(object):
         """obs: (obs_dim,), hist: (hist_len, obs_dim), w: (3,). Returns action (12,)."""
         pref = np.asarray(w if w is not None else self.w, dtype=np.float32)
         z_H, v_hat = self.encode_history(hist, pref)
+        self.last_v_hat = np.asarray(v_hat, dtype=np.float32)  # the policy's own base-velocity estimate (body frame), read by the controller for the run log
 
         if self.film_actor:
             gb = self.film_net(pref)
