@@ -22,7 +22,7 @@ import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from talon_a1.controller import PASSIVE, STAND, WALK, Controller, RunLog, START_WALK, STAND_UP, STOP_WALK, TO_PASSIVE, fault_names, obs_noise_amplitude  # noqa: E402
+from talon_a1.controller import PASSIVE, STAND, WALK, Controller, RunLog, START_WALK, provenance, STAND_UP, STOP_WALK, TO_PASSIVE, fault_names, obs_noise_amplitude  # noqa: E402
 from talon_a1.remote import Remote  # noqa: E402
 
 PREFERENCES = {  # the four preferences of the PROMO hardware study (w = track, stab, eff)
@@ -200,7 +200,7 @@ def run_trial(drv, policy, segments, args, w, log_path, meta, sleep=True, fault_
     entry = dict(meta, outcome=tr.outcome, faults=faults, log=os.path.basename(log_path), run_time_s=tr.t,
                  walk_time_s=None if tr.walk_start_t is None else (tr.walk_end_t if tr.walk_end_t is not None else tr.t) - tr.walk_start_t,
                  policy_overruns=ctl.overruns)
-    log.save(log_path, dict(meta, outcome=tr.outcome, faults=faults, args={k: v for k, v in vars(args).items() if not k.startswith("_")}))
+    log.save(log_path, dict(meta, **provenance(getattr(args, "policy", None), policy), outcome=tr.outcome, faults=faults, args={k: v for k, v in vars(args).items() if not k.startswith("_")}))
     return entry
 
 

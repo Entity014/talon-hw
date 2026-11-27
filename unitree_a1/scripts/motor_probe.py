@@ -110,7 +110,8 @@ class Probe(object):
             raise Abort("target refused")
         self.check()
         s, q, tau = self.read()
-        self.rows.append(np.concatenate([[time.monotonic() - self.t0], target, q, tau]))
+        dq = contract.sdk_to_policy(np.asarray(s.dq))
+        self.rows.append(np.concatenate([[time.monotonic() - self.t0], target, q, tau, dq]))
 
     def run_for(self, duration, target_at, ref, joint):
         """50 Hz for duration seconds. target_at(r) with r from 0 to 1."""
@@ -224,7 +225,8 @@ def main():
         if not os.path.isdir(args.log_dir):
             os.makedirs(args.log_dir)
         path = os.path.join(args.log_dir, time.strftime("probe_%Y%m%d_%H%M%S.npz"))
-        np.savez_compressed(path, rows=np.asarray(rows), columns=np.array("t, target 12, q 12, tau_est 12; policy order"))
+        np.savez_compressed(path, rows=np.asarray(rows), columns=np.array("t, target 12, q 12, tau_est 12, dq 12; policy order"),
+                            kp=KP if not args.box else BOX_KP, kd=KD, step=STEP, ramp_s=RAMP_S, hold_s=HOLD_S, box=bool(args.box))
         print("log: %s" % path)
     counts = {v: list(results.values()).count(v) for v in set(results.values())}
     print("result: %s" % (failed or "finished"), counts)

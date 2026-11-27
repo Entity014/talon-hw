@@ -9,6 +9,7 @@ Remote combos (edge triggered):
     L2 + B   any                e-stop, handled in the C++ motor loop and latched there
 """
 
+import os
 import time
 
 import numpy as np
@@ -161,13 +162,20 @@ class Controller(object):
         return start, True
 
     def _send(self, q_policy, kp=contract.KP, kd=contract.KD):
+        self._gains = (float(kp), float(kd))  # logged per tick: the soft start ramps them
         return self.drv.set_target(list(contract.policy_to_sdk(q_policy).astype(float)), kp, kd)
 
     def _send_stand(self, q_policy):
         return self._send(q_policy, contract.STAND_KP, contract.STAND_KD)
 
     def step(self, state):
-        """One 20 ms tick. Returns the record logged for it."""
+        """One 20 ms tick. Returns the record logged for it (with the Kp / Kd sent this tick, NaN if none)."""
+        self._gains = (float("nan"), float("nan"))
+        rec = self._step(state)
+        rec["kp"], rec["kd"] = self._gains
+        return rec
+
+    def _step(self, state):
         rec = {"mode": self.mode, "faults": int(state.faults)}
         self.remote.update(state)
 
@@ -250,6 +258,7 @@ class Controller(object):
             a, v_hat, z_hat = self.policy.action_mean(x, self.last_action, self.hist.buf)
 
         # RMA's tanh bounds the mean to +-1; PROMO actors are linear and need |a| > 1 to step, so run.py raises the clip for them. Feed back what was applied.
+        rec["action_raw"] = np.asarray(a, dtype=np.float32).copy()  # what the policy asked for, before clip / EMA / soft start
         a = np.clip(a, -self.action_clip, self.action_clip).astype(np.float32)
 
         # Action EMA low-pass filtering to damp high-frequency chatter on real hardware
@@ -309,7 +318,9 @@ class Controller(object):
 class RunLog(object):
     """Per-tick arrays, saved as one .npz. NaN where a field does not apply in that mode."""
 
-    FIELDS = (("q", 12), ("dq", 12), ("tau_est", 12), ("quat", 4), ("gyro", 3), ("rpy", 3), ("foot_force", 4))
+    FIELDS = (("q", 12), ("dq", 12), ("tau_est", 12), ("quat", 4), ("gyro", 3), ("rpy", 3), ("foot_force", 4), ("acc", 3))
+    STATE_SCALARS = ("target_age", "max_period", "keys")  # NaN when the state has no such field (fakes)
+    REC_SCALARS = ("kp", "kd")
 
     def __init__(self, obs_dim=contract.OBS_DIM):
         self.obs_dim = obs_dim
@@ -321,13 +332,21 @@ class RunLog(object):
             ("z_hat", contract.LATENT),
             ("q_target", 12),
             ("w", contract.W_DIM_PROMO_V2),
+            ("action_raw", 12),
         )
         self.rows = {name: [] for name, _ in self.FIELDS + self.rec_spec}
         self.rows.update(t=[], mode=[], faults=[], compute_s=[], tick=[], loop_overruns=[])
+        for name in self.STATE_SCALARS + self.REC_SCALARS:
+            self.rows[name] = []
 
     def append(self, state, rec):
         for name, n in self.FIELDS:
-            self.rows[name].append(np.asarray(getattr(state, name), dtype=np.float32))
+            v = getattr(state, name, None)
+            self.rows[name].append(np.full(n, np.nan, np.float32) if v is None else np.asarray(v, dtype=np.float32))
+        for name in self.STATE_SCALARS:
+            self.rows[name].append(float(getattr(state, name, float("nan"))))
+        for name in self.REC_SCALARS:
+            self.rows[name].append(float(rec.get(name, float("nan"))))
         for name, n in self.rec_spec:
             v = rec.get(name)
             self.rows[name].append(np.full(n, np.nan, np.float32) if v is None else np.asarray(v, np.float32))
@@ -345,3 +364,30 @@ class RunLog(object):
 
             arrays["meta"] = np.array(json.dumps(meta))
         np.savez_compressed(path, **arrays)
+
+
+def provenance(policy_path=None, policy=None):
+    """Who ran what: policy file sha256, loaded default_q (thighs show the pose at a glance) and the talon-hw git state. Never raises."""
+    import hashlib
+    import subprocess
+
+    out = {}
+    try:
+        if policy_path:
+            h = hashlib.sha256()
+            with open(policy_path, "rb") as f:
+                for b in iter(lambda: f.read(1 << 20), b""):
+                    h.update(b)
+            out["policy_sha256"] = h.hexdigest()
+        dq = getattr(policy, "default_q", None)
+        if dq is not None:
+            out["default_q"] = [round(float(x), 4) for x in dq]
+    except Exception as e:  # noqa: BLE001
+        out["policy_provenance_error"] = str(e)
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        out["git_rev"] = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=here, stderr=subprocess.DEVNULL).decode().strip()
+        out["git_dirty"] = bool(subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], cwd=here, stderr=subprocess.DEVNULL).strip())
+    except Exception:  # noqa: BLE001
+        out["git_rev"] = None
+    return out

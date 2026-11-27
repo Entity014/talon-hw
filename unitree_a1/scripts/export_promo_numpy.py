@@ -10,7 +10,7 @@ import torch
 
 from talon_rl.promo.networks import model_from_state
 
-def export_promo_numpy(checkpoint_path: Path, out_path: Path):
+def export_promo_numpy(checkpoint_path: Path, out_path: Path, thigh_front: float = 0.8, thigh_rear: float = 1.0):
     state = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     ac = model_from_state(state["model"]).eval()
     ac.load_state_dict(state["model"])
@@ -60,7 +60,7 @@ def export_promo_numpy(checkpoint_path: Path, out_path: Path):
         "action_scale": 0.25,
         "kp": 55.0,
         "kd": 0.8,
-        "default_q": [0.1, -0.1, 0.1, -0.1, 0.8, 0.8, 1.0, 1.0, -1.5, -1.5, -1.5, -1.5]
+        "default_q": [0.1, -0.1, 0.1, -0.1, thigh_front, thigh_front, thigh_rear, thigh_rear, -1.5, -1.5, -1.5, -1.5]  # the default pose the policy was trained with (oursA / base_v2: 0.8 / 1.0; oursA_v2: 0.9 / 0.9)
     }
     weights["meta"] = np.array(json.dumps(meta))
 
@@ -89,5 +89,7 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint", required=True)
     p.add_argument("--out", required=True)
+    p.add_argument("--thigh-front", type=float, default=0.8, help="default front thigh angle used in training (oursA_v2: 0.9)")
+    p.add_argument("--thigh-rear", type=float, default=1.0, help="default rear thigh angle used in training (oursA_v2: 0.9)")
     args = p.parse_args()
-    export_promo_numpy(Path(args.checkpoint), Path(args.out))
+    export_promo_numpy(Path(args.checkpoint), Path(args.out), args.thigh_front, args.thigh_rear)

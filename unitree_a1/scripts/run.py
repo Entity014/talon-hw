@@ -18,7 +18,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from talon_a1 import _a1_driver, contract, sport  # noqa: E402
-from talon_a1.controller import Controller, RunLog, obs_noise_amplitude  # noqa: E402
+from talon_a1.controller import Controller, RunLog, obs_noise_amplitude, provenance  # noqa: E402
 from talon_a1.policy import OnnxPolicy, RmaPolicy, load_policy  # noqa: E402
 from talon_a1.remote import Remote, combo  # noqa: E402
 
@@ -164,6 +164,7 @@ def main():
         meta = {"args": vars(args), "policy": policy.meta, "with_sdk": bool(_a1_driver.WITH_SDK),
                 "realtime": drv.realtime, "policy_overruns": ctl.overruns, "motor_overruns": final.overruns,
                 "motor_max_period_s": final.max_period}
+        meta.update(provenance(args.policy, policy))
         log.save(path, meta)
         print(json.dumps({k: meta[k] for k in ("policy_overruns", "motor_overruns", "motor_max_period_s")}))
         print("log: %s" % path)

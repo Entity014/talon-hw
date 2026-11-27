@@ -68,3 +68,9 @@ The replay profile is scripted: fwd 0.3 m/s 4 s, back 0.3 m/s 4 s, left 0.2 m/s 
 2. Optional: video from above or at an angle with a taped floor grid, for the distance of each segment.
 3. Automatic (`analyze_protocol.py` writes `per_segment.csv` and prints pass counts): per segment the mean `v_hat` (estimate), the mean gyro z and the yaw angle (integral of gyro z over the constant-command part; the 0.5 s ramp is excluded, so 0.4 rad/s x 3.5 s = 80 deg expected). Pass = within 30 % of the command. Yaw segments use the gyro and are measured; translation segments use `v_hat` and are only an estimate, so confirm them with item 1 or 2.
 4. Put the table of pass counts per preference (fwd / back / left / right / yawL / yawR) into the session note; this is the directional pass table of section 4.
+
+## 9. Decision recorded 2026-11-27: symmetric default pose to fix v1
+
+Default pose (`default_q`): v1 (oursA) thigh front 0.8 / rear 1.0; v2 thigh 0.9 on all four legs. Decision: the next fix of v1 uses only the symmetric pose (thigh 0.9 all legs), with the oursA recipe otherwise unchanged (no DR, no delay), so that the effect of the pose is separable from the DR of v2.
+Evidence so far (MuJoCo, stand, command 0, HW-SI): v1 tilts up to 7.8 deg roll (tracking w), v2 stays within 1 deg. v2 final did not walk better in HW-SI (stability and efficiency stand still), and was under-trained (reward 14 vs 23).
+Not trained yet. When it is exported, use `export_promo_numpy.py --thigh-front 0.9 --thigh-rear 0.9` and check `default_q` in the npz meta before any robot test.

@@ -23,6 +23,8 @@ import os
 
 import numpy as np
 
+_trapz = getattr(np, "trapezoid", None) or np.trapz  # numpy 2 renamed trapz
+
 
 def window_rows(d, skip_s):
     mode = np.array([str(x) for x in d["mode"]])
@@ -117,7 +119,7 @@ def segment_metrics(d, skip_s=1.0, min_run_s=1.5, tol=0.3):
             vm = np.nanmean(vh[m], axis=0) if j + 1 > m.start else np.full(2, np.nan)
             meas = gm if k == 2 else float(vm[k])
             out.append(dict(label=label, cmd=float(c[i][k]), dur_s=float(dur), v_hat_x=float(vm[0]), v_hat_y=float(vm[1]), gyro_z_mean=gm,
-                            yaw_deg=float(np.degrees(np.trapz(gz[i:j + 1], t[i:j + 1]))), measured=float(meas),
+                            yaw_deg=float(np.degrees(_trapz(gz[i:j + 1], t[i:j + 1]))), measured=float(meas),
                             passed=bool(np.isfinite(meas) and abs(meas - c[i][k]) <= tol * abs(c[i][k]) and np.sign(meas) == np.sign(c[i][k]))))
         i = j + 1
     return out

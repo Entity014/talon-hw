@@ -42,13 +42,19 @@ def default_q(name: str) -> float:
     return -1.5
 
 
-def run_rollout(policy, xml_path: Path, w, cmd_vx: float, kp: float, kd: float, delay_ms: float, frictionloss: float, damping: float, action_smooth: float, steps: int):
+def run_rollout(policy, xml_path: Path, w, cmd_vx: float, kp: float, kd: float, delay_ms: float, frictionloss: float, damping: float, action_smooth: float, steps: int, obs_noise: float = 0.0, seed: int = 0, stiff_friction: bool = False, on_step=None):
     m = mujoco.MjModel.from_xml_path(str(xml_path))
     m.opt.timestep = 0.005
     m.actuator_gainprm[:, 0] = kp
     m.actuator_biasprm[:, :3] = [0.0, -kp, -kd]
     m.dof_damping[6:] = damping
-    m.dof_frictionloss[6:] = frictionloss
+    if isinstance(frictionloss, dict):  # per joint type: {'hip': x, 'thigh': y, 'calf': z}
+        for n in JOINTS:
+            m.dof_frictionloss[m.jnt_dofadr[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_JOINT, n)]] = frictionloss[n.split('_')[1]]
+    else:
+        m.dof_frictionloss[6:] = frictionloss
+    if stiff_friction:  # MuJoCo's default friction constraint is soft and creeps; this matches the A1 box probe (thigh frictionloss ~1.0)
+        m.dof_solimp[6:, :2] = (0.99, 0.999)
     m.actuator_ctrllimited[:] = 0
     m.actuator_forcerange[:] = [-33.5, 33.5]
     m.actuator_forcelimited[:] = 1
@@ -59,6 +65,10 @@ def run_rollout(policy, xml_path: Path, w, cmd_vx: float, kp: float, kd: float, 
     vadr = np.array([m.jnt_dofadr[jid[n]] for n in JOINTS])
     aord = np.array([aid[n.replace("_joint", "")] for n in JOINTS])
     q0 = np.array([default_q(n) for n in JOINTS], dtype=np.float32)
+    pq = getattr(policy, "default_q", None)  # policy order: 4 hips, 4 thighs (front, front, rear, rear), 4 calves
+    if pq is not None:
+        tf, tr = float(pq[4]), float(pq[6])
+        q0 = np.array([(tf if n.startswith("F") else tr) if "thigh" in n else default_q(n) for n in JOINTS], dtype=np.float32)
 
     d = mujoco.MjData(m)
     d.qpos[2] = 0.30
@@ -69,18 +79,24 @@ def run_rollout(policy, xml_path: Path, w, cmd_vx: float, kp: float, kd: float, 
     delay_substeps = max(0, int(round(delay_ms / 5.0)))
     ctrl_buf = deque([q0.copy()] * (delay_substeps + 1), maxlen=delay_substeps + 1)
 
-    cmd = np.array([cmd_vx, 0.0, 0.0], dtype=np.float32)
+    cmd = np.array([0.0, 0.0, 0.0] if callable(cmd_vx) else cmd_vx if np.ndim(cmd_vx) else [cmd_vx, 0.0, 0.0], dtype=np.float32)  # scalar = vx, or (vx, vy, wz)
     w_arr = np.array(w, dtype=np.float32)
     last_act = np.zeros(12, dtype=np.float32)
     hist = None
+    rng = np.random.default_rng(seed)
+    # training corruption, uniform: gyro 0.2, gravity 0.05, joint_pos 0.01, joint_vel 1.5 (cmd, last_action clean); obs_noise scales it
+    nz = obs_noise * np.concatenate([np.full(3, 0.2), np.full(3, 0.05), np.zeros(3), np.full(12, 0.01), np.full(12, 1.5), np.zeros(12)]).astype(np.float32)
 
-    vxs, gyros, powers, acts = [], [], [], []
+    vxs, gyros, powers, acts, vels = [], [], [], [], []
     warmup_steps = min(100, steps // 4)
     for s in range(steps):
+        if callable(cmd_vx):  # time-varying command: cmd_vx(step) -> (vx, vy, wz)
+            cmd = np.array(cmd_vx(s), dtype=np.float32)
         R = d.xmat[1].reshape(3, 3)
         ang = R.T @ d.qvel[3:6]
         grav = R.T @ np.array([0.0, 0.0, -1.0])
         obs = np.concatenate([ang, grav, cmd, d.qpos[qadr] - q0, d.qvel[vadr], last_act]).astype(np.float32)
+        obs = obs + rng.uniform(-1.0, 1.0, obs.shape).astype(np.float32) * nz
         hist = np.repeat(obs[None, :], 10, axis=0) if hist is None else np.concatenate([hist[1:], obs[None, :]], axis=0)
         raw_act = policy.action_mean(obs, hist, w_arr)
         act = (1.0 - action_smooth) * raw_act + action_smooth * last_act
@@ -92,8 +108,11 @@ def run_rollout(policy, xml_path: Path, w, cmd_vx: float, kp: float, kd: float, 
             mujoco.mj_step(m, d)
             if s >= warmup_steps:
                 powers.append(np.sum(np.maximum(d.qfrc_actuator[vadr] * d.qvel[vadr], 0.0)))
+        if on_step is not None:
+            on_step(m, d, s, act)  # e.g. a renderer
         if s >= warmup_steps:
             vxs.append((R.T @ d.qvel[:3])[0])
+            vels.append([(R.T @ d.qvel[:3])[0], (R.T @ d.qvel[:3])[1], ang[2]])
             gyros.append(ang[:2].copy())
             acts.append(act.copy())
         if d.qpos[2] < 0.12:
@@ -107,6 +126,7 @@ def run_rollout(policy, xml_path: Path, w, cmd_vx: float, kp: float, kd: float, 
         power=float(np.mean(powers)),
         gyro_rp=float(np.mean(np.std(gyros, axis=0))),
         act_rate=ar,
+        vel=np.mean(vels, axis=0),  # body (vx, vy, wz) mean after warm-up
     )
 
 
@@ -120,6 +140,7 @@ def main():
     p.add_argument("--frictionloss", type=float, default=1.0)
     p.add_argument("--damping", type=float, default=0.2)
     p.add_argument("--action-smooth", type=float, default=0.0)
+    p.add_argument("--obs-noise", type=float, default=0.0, help="scale of the training observation noise (1.0 = as trained)")
     p.add_argument("--steps", type=int, default=400)
     p.add_argument("--ideal", action="store_true", help="Override to Ideal Sim (0 ms, Kd=0.80, friction=0, damping=0)")
     args = p.parse_args()
@@ -133,7 +154,7 @@ def main():
     for cmd_name, cmd_vx in [("move_fast (0.50 m/s)", 0.50), ("move_slow (0.25 m/s)", 0.25)]:
         print(f"--- {cmd_name} ---")
         for pname in ("tracking", "stability", "efficiency", "balanced"):
-            r = run_rollout(policy, args.xml, PREFERENCES[pname], cmd_vx, args.kp, args.kd, args.delay_ms, args.frictionloss, args.damping, args.action_smooth, args.steps)
+            r = run_rollout(policy, args.xml, PREFERENCES[pname], cmd_vx, args.kp, args.kd, args.delay_ms, args.frictionloss, args.damping, args.action_smooth, args.steps, args.obs_noise)
             status = "OK" if r["survived"] else f"FALL@{r['steps']}"
             print(f"  {pname:10s}: {status:8s} | vx={r['vx']:+.3f} m/s | power={r['power']:5.1f} W | gyro_rp={r['gyro_rp']:.3f} | act_rate={r['act_rate']:5.2f}")
 

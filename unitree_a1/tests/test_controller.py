@@ -150,3 +150,55 @@ def test_stand_gains_then_policy_gains():
     ctl.step(FakeState(q0, combo("L1", "Y")))
     ctl.step(FakeState(q0))
     assert ctl.mode == STAND and drv.targets[-1][1:] == (contract.STAND_KP, contract.STAND_KD)
+
+
+def test_runlog_new_fields_and_gains(tmp_path):
+    """RunLog keeps acc, the state scalars, the Kp/Kd sent per tick and the raw policy action; a state without them gives NaN."""
+    import numpy as np
+    from talon_a1.controller import RunLog
+
+    class S:
+        q = dq = tau_est = [0.0] * 12
+        quat = [1.0, 0, 0, 0]
+        gyro = rpy = [0.0] * 3
+        foot_force = [0] * 4
+        tick = 1
+        faults = 0
+        overruns = 0
+
+    log = RunLog()
+    rec = {"t": 0.0, "mode": "WALK", "faults": 0, "compute_s": 0.0, "kp": 33.0, "kd": 0.4, "action_raw": np.full(12, 2.5, np.float32)}
+    log.append(S, rec)
+    S.acc = [0.0, 0.0, 9.8]
+    S.target_age = 0.01
+    S.keys = 3
+    log.append(S, dict(rec, kp=55.0))
+    out = tmp_path / "x.npz"
+    log.save(str(out))
+    d = np.load(out)
+    assert np.isnan(d["acc"][0]).all() and d["acc"][1, 2] == np.float32(9.8)
+    assert np.isnan(d["target_age"][0]) and abs(d["target_age"][1] - 0.01) < 1e-6 and d["keys"][1] == 3
+    assert list(d["kp"]) == [33.0, 55.0] and (d["action_raw"] == 2.5).all()
+
+
+def test_step_records_gains_and_raw_action():
+    """step() adds the gains of the tick (NaN when nothing was sent)."""
+    import math
+    from talon_a1.controller import Controller
+
+    class D:
+        def set_target(self, q, kp, kd):
+            return True
+
+    class C(object):
+        pass
+
+    c = Controller.__new__(Controller)
+    c.drv = D()
+    c._gains = (float("nan"), float("nan"))
+    c._step = lambda state: {"mode": "PASSIVE", "faults": 0}
+    rec = Controller.step(c, None)
+    assert math.isnan(rec["kp"]) and math.isnan(rec["kd"])
+    c._step = lambda state: (c._send([0.0] * 12, 12.0, 0.5), {"mode": "STAND", "faults": 0})[1]
+    rec = Controller.step(c, None)
+    assert rec["kp"] == 12.0 and rec["kd"] == 0.5
