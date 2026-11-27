@@ -20,7 +20,7 @@ sys.path.insert(0, ROOT)
 from talon_a1 import _a1_driver, contract, sport  # noqa: E402
 from talon_a1.controller import Controller, RunLog, obs_noise_amplitude, provenance  # noqa: E402
 from talon_a1.policy import OnnxPolicy, RmaPolicy, load_policy  # noqa: E402
-from talon_a1.remote import Remote, combo  # noqa: E402
+from talon_a1.remote import MacroRemote, combo  # noqa: E402
 
 
 def desk_demo(drv):
@@ -59,6 +59,12 @@ def main():
     p.add_argument("--vx-max", type=float, default=0.5)
     p.add_argument("--vy-max", type=float, default=0.3)
     p.add_argument("--wz-max", type=float, default=0.5)
+    p.add_argument("--macro-vx", type=float, default=0.6,
+                   help="forward speed vx (m/s) for the R1+X joystick walk macro (default: 0.6)")
+    p.add_argument("--macro-dist", type=float, default=3.0,
+                   help="target distance (m) for the R1+X joystick walk macro (default: 3.0)")
+    p.add_argument("--macro-ramp", type=float, default=0.5,
+                   help="ramp up/down time (s) for the R1+X joystick walk macro (default: 0.5)")
     p.add_argument("--stand-time", type=float, default=3.0)
     p.add_argument("--power-limit", type=float, default=300.0, help="W of sum |tau_est * dq|, latched fault after 20 ms")
     p.add_argument("--tilt-limit", type=float, default=0.5, help="rad, latched fault while armed")
@@ -135,7 +141,12 @@ def main():
 
     obs_dim = getattr(policy, "obs_dim", contract.OBS_DIM)
     log = RunLog(obs_dim=obs_dim)
-    ctl = Controller(drv, policy, Remote(args.vx_max, args.vy_max, args.wz_max), dict(_a1_driver.FAULTS),
+    remote = MacroRemote(args.vx_max, args.vy_max, args.wz_max,
+                         macro_vx=args.macro_vx, macro_dist=args.macro_dist, macro_ramp=args.macro_ramp,
+                         stand_time=args.stand_time, soft_start=args.soft_start)
+    print("Joystick macro ready: R1+X = stand -> walk %.1f m @ vx=%.2f m/s -> stop -> sit (R1+Y or stick = cancel)"
+          % (args.macro_dist, args.macro_vx))
+    ctl = Controller(drv, policy, remote, dict(_a1_driver.FAULTS),
                      stand_time=args.stand_time, action_clip=args.action_clip, log=log, policy_kp=policy_kp,
                      allow_walk=not args.stand_only, soft_start=args.soft_start,
                      action_scale=action_scale, w=args.w,

@@ -217,6 +217,91 @@ def replay_log_check(log_path: Path, models: dict, hist_len: int, tol: float) ->
     return ok
 
 
+def mujoco_rollout_check(models: dict, xml_path: Path, steps: int, q_tol: float = 2e-3) -> bool:
+    import mujoco
+
+    if not xml_path.exists():
+        print(f"[MUJOCO] FAIL: scene.xml not found at {xml_path}")
+        return False
+
+    print(f"[MUJOCO] Closed-loop {steps}-step rollout ({steps * 0.02:.1f}s @ 50Hz) across {list(models.keys())}:")
+    joints = [f"{leg}_{kind}_joint" for kind in ("hip", "thigh", "calf") for leg in ("FL", "FR", "RL", "RR")]
+
+    def def_q(n: str) -> float:
+        if "hip" in n:
+            return -0.1 if n.startswith(("FR", "RR")) else 0.1
+        return (0.8 if n.startswith("F") else 1.0) if "thigh" in n else -1.5
+
+    def one_rollout(fn):
+        m = mujoco.MjModel.from_xml_path(str(xml_path))
+        m.opt.timestep = 0.005
+        m.actuator_gainprm[:, 0] = 55.0
+        m.actuator_biasprm[:, :3] = [0.0, -55.0, -0.8]
+        m.dof_damping[6:] = 0.0
+        m.dof_frictionloss[6:] = 0.0
+        m.actuator_ctrllimited[:] = 0
+        m.actuator_forcerange[:] = [-33.5, 33.5]
+        m.actuator_forcelimited[:] = 1
+        jid = {mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_JOINT, j): j for j in range(m.njnt)}
+        aid = {mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_ACTUATOR, i).replace("_joint", ""): i for i in range(m.nu)}
+        qadr = np.array([m.jnt_qposadr[jid[n]] for n in joints])
+        vadr = np.array([m.jnt_dofadr[jid[n]] for n in joints])
+        aord = np.array([aid[n.replace("_joint", "")] for n in joints])
+        q0 = np.array([def_q(n) for n in joints], dtype=np.float32)
+
+        d = mujoco.MjData(m)
+        d.qpos[2] = 0.30
+        d.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
+        d.qpos[qadr] = q0
+        mujoco.mj_forward(m, d)
+
+        cmd = np.array([0.5, 0.0, 0.0], dtype=np.float32)
+        w = np.array([0.8, 0.1, 0.1], dtype=np.float32)
+        last_act = np.zeros(12, dtype=np.float32)
+        hist = None
+        qs, acts, vxs = [], [], []
+        for s in range(steps):
+            R = d.xmat[1].reshape(3, 3)
+            obs = np.concatenate([R.T @ d.qvel[3:6], R.T @ [0.0, 0.0, -1.0], cmd, d.qpos[qadr] - q0, d.qvel[vadr], last_act]).astype(np.float32)
+            hist = np.repeat(obs[None, :], 10, axis=0) if hist is None else np.concatenate([hist[1:], obs[None, :]], axis=0)
+            act = fn(obs, hist, w)
+            last_act = act
+            d.ctrl[aord] = q0 + 0.25 * act
+            for _ in range(4):
+                mujoco.mj_step(m, d)
+            qs.append(d.qpos[qadr].copy())
+            acts.append(act.copy())
+            vxs.append((R.T @ d.qvel[:3])[0])
+            if d.qpos[2] < 0.12:
+                return np.array(qs), np.array(acts), np.array(vxs), False, s
+        return np.array(qs), np.array(acts), np.array(vxs), True, steps
+
+    results = {}
+    ok = True
+    for name, fn in models.items():
+        qs, acts, vxs, survived, st = one_rollout(fn)
+        results[name] = (qs, acts, vxs, survived, st)
+        print(f"         {name:4s}: survived={survived} ({st}/{steps}), mean_vx={vxs.mean():+.3f} m/s")
+        if not survived:
+            ok = False
+
+    names = list(models.keys())
+    for i, a in enumerate(names):
+        qa, aa = results[a][0], results[a][1]
+        for b in names[i + 1 :]:
+            qb, ab = results[b][0], results[b][1]
+            n = min(len(qa), len(qb))
+            n200 = min(200, n)
+            q_diff_200 = float(np.abs(qa[:n200] - qb[:n200]).max())
+            q_diff_all = float(np.abs(qa[:n] - qb[:n]).max())
+            a_diff_all = float(np.abs(aa[:n] - ab[:n]).max())
+            st = "OK" if q_diff_200 <= q_tol else "FAIL"
+            print(f"         {a:4s} vs {b:4s}: q_max_200={q_diff_200:.2e}, q_max_{n}={q_diff_all:.2e}, act_max={a_diff_all:.2e} [{st}]")
+            if q_diff_200 > q_tol:
+                ok = False
+    return ok
+
+
 def run_check(
     policy_dir: Path,
     pt_path: Path | None,
@@ -229,6 +314,8 @@ def run_check(
     tol: float,
     do_layer_check: bool,
     replay_log: Path | None,
+    mujoco_xml: Path | None = None,
+    mujoco_steps: int = 0,
 ) -> bool:
     print(f"=== Checking policy directory: {policy_dir} ===")
     ok = True
@@ -366,6 +453,11 @@ def run_check(
         if not replay_log_check(replay_log, models, hist_len, tol):
             ok = False
 
+    # 7. Level 3 Closed-Loop MuJoCo Rollout Check
+    if mujoco_steps > 0 and mujoco_xml is not None:
+        if not mujoco_rollout_check(models, mujoco_xml, mujoco_steps):
+            ok = False
+
     print(f"=== RESULT: {'PASS' if ok else 'FAIL'} ===\n")
     return ok
 
@@ -381,6 +473,9 @@ def main():
     p.add_argument("--tol", type=float, default=1e-4, help="Max absolute action error tolerance")
     p.add_argument("--layer-check", action="store_true", help="Run layer-by-layer PyTorch vs NumPy comparison")
     p.add_argument("--replay-log", type=Path, default=None, help="Optional logs/run_*.npz to replay")
+    p.add_argument("--mujoco-rollout", action="store_true", help="Run 500-step closed-loop MuJoCo rollout comparing .pt, .onnx, and .npz")
+    p.add_argument("--mujoco-steps", type=int, default=500, help="Steps for --mujoco-rollout (50 Hz)")
+    p.add_argument("--mujoco-xml", type=Path, default=THESIS_ROOT / "talon-rl" / "assets" / "mujoco_a1" / "scene.xml", help="MuJoCo scene.xml path")
     args = p.parse_args()
 
     d = args.dir
@@ -394,6 +489,8 @@ def main():
         d, pt, onnx, npz, meta, ref,
         args.samples, args.uniform_samples, args.tol,
         args.layer_check, args.replay_log,
+        args.mujoco_xml if args.mujoco_rollout else None,
+        args.mujoco_steps if args.mujoco_rollout else 0,
     )
     sys.exit(0 if passed else 1)
 

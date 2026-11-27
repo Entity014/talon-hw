@@ -234,19 +234,28 @@ def main():
     p.add_argument("--action-smooth", type=float, default=0.0, help="EMA action smoothing factor in [0, 1) to damp motor chatter (see run.py)")
     p.add_argument("--lead-ms", type=float, default=0.0, help="lead compensation of the observation in ms (see run.py); 0 = off")
     p.add_argument("--rest-s", type=float, default=0.0, help="wait this many seconds between trials (motors cool down)")
+    p.add_argument("--start-from", type=int, default=1, help="1-based schedule index to resume from (keeps existing manifest.json)")
+    p.add_argument("--schedule-file", default=None, help="JSON list of [index, preference, regime, trial] to run instead of make_schedule (appends to manifest.json)")
     args = p.parse_args()
-    cells = make_schedule(args.preferences, args.regimes, args.trials, args.seed)
-    total = sum(profile_duration(REGIMES[r]) + 3 + 1 + 1.5 + 3 for _, r, _ in cells)
-    print("%d trials (%s x %s x %d), seed %d; about %.0f min of robot time without the operator's pauses" % (len(cells), ",".join(args.preferences), ",".join(args.regimes), args.trials, args.seed, total / 60))
-    for i, (pref, reg, k) in enumerate(cells):
-        print("  %2d  %-10s %-9s trial %d  w=%s" % (i + 1, pref, reg, k + 1, PREFERENCES[pref]))
+    if args.schedule_file:
+        with open(args.schedule_file) as f:
+            scheduled = [(int(idx), p_name, r_name, int(t_num) - 1) for idx, p_name, r_name, t_num in json.load(f)]
+        total = sum(profile_duration(REGIMES[r]) + 3 + 1 + 1.5 + 3 for _, _, r, _ in scheduled)
+        print("%d trials from %s; about %.0f min of robot time without the operator's pauses" % (len(scheduled), args.schedule_file, total / 60))
+    else:
+        cells = make_schedule(args.preferences, args.regimes, args.trials, args.seed)
+        scheduled = [(i + 1, pref, reg, k) for i, (pref, reg, k) in enumerate(cells) if i + 1 >= args.start_from]
+        total = sum(profile_duration(REGIMES[r]) + 3 + 1 + 1.5 + 3 for _, _, r, _ in scheduled)
+        print("%d trials (%s x %s x %d), seed %d; about %.0f min of robot time without the operator's pauses" % (len(cells), ",".join(args.preferences), ",".join(args.regimes), args.trials, args.seed, total / 60))
+    for idx, pref, reg, k in scheduled:
+        print("  %2d  %-10s %-9s trial %d  w=%s" % (idx, pref, reg, k + 1, PREFERENCES[pref]))
     if args.dry_run:
         return
 
     from talon_a1 import _a1_driver, contract, sport
     from talon_a1.policy import load_policy
 
-    first_w = PREFERENCES[cells[0][0]]
+    first_w = PREFERENCES[scheduled[0][1]]
     policy = load_policy(args.policy, w=first_w)
     args.action_scale = getattr(policy, "action_scale", contract.ACTION_SCALE)
     args.policy_kp = getattr(policy, "kp", contract.KP)
@@ -261,7 +270,11 @@ def main():
     drv.start()
     os.makedirs(args.out_dir, exist_ok=True)
     manifest_path = os.path.join(args.out_dir, "manifest.json")
-    manifest = []
+    if (args.start_from > 1 or args.schedule_file) and os.path.exists(manifest_path):
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+    else:
+        manifest = []
     try:
         if args.interactive:
             shortcuts = {"a": "replay", "b": "move_fast", "c": "move_slow"}
@@ -297,16 +310,16 @@ def main():
                     drv.clear_faults()
             return
 
-        for i, (pref, reg, k) in enumerate(cells):
+        for pos, (idx, pref, reg, k) in enumerate(scheduled):
             w = np.array(PREFERENCES[pref], dtype=np.float32)
-            name = "%02d_%s_%s_t%d" % (i + 1, pref, reg, k + 1)
+            name = "%02d_%s_%s_t%d" % (idx, pref, reg, k + 1)
             if not args.no_prompt:
-                ans = input("[%d/%d] %s: put the robot on the start mark, lane clear. Enter = run, s = skip, q = quit: " % (i + 1, len(cells), name)).strip().lower()
+                ans = input("[%d/%d (#%d)] %s: put the robot on the start mark, lane clear. Enter = run, s = skip, q = quit: " % (pos + 1, len(scheduled), idx, name)).strip().lower()
                 if ans == "q":
                     break
                 if ans == "s":
                     continue
-            meta = {"index": i + 1, "preference": pref, "w": [float(x) for x in w], "regime": reg, "trial": k + 1, "seed": args.seed, "policy": os.path.basename(args.policy)}
+            meta = {"index": idx, "preference": pref, "w": [float(x) for x in w], "regime": reg, "trial": k + 1, "seed": args.seed, "policy": os.path.basename(args.policy)}
             if hasattr(policy, "set_preference"):
                 policy.set_preference(w)
             entry = run_trial(drv, policy, REGIMES[reg], args, w, os.path.join(args.out_dir, name + ".npz"), meta, fault_table=dict(_a1_driver.FAULTS))
